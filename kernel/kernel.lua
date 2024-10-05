@@ -128,16 +128,33 @@ end
 
 
 local eventQueue = {}
-local function getEvent(consume)
-	if consume then
-		if #eventQueue > 0 then
-			return table.remove(eventQueue)
-		else
-			return { os.pullEventRaw() }
-		end
-	else
-		table.insert(eventQueue, 1, { os.pullEventRaw() })
+local function requeueEvents(single)
+	-- Grab the next event and exit
+	if single then
+		table.insert(eventQueue, { os.pullEventRaw() })
+		return 1
 	end
+
+	-- Add sentinal to the end of the queue and grab all events
+	os.queueEvent("_kernel", "sched_event")
+	local nEvent = -1
+	repeat
+		local event = { os.pullEventRaw() }
+		table.insert(eventQueue, event)
+
+		nEvent = nEvent + 1
+	until event[1] == "_kernel" and event[2] == "sched_event"
+
+	return nEvent
+end
+
+local function nextEvent()
+	while #eventQueue == 0 do
+		instance.suspend(0)
+		coroutine.yield()
+	end
+
+	return table.remove(eventQueue, 1)
 end
 
 
@@ -339,7 +356,7 @@ end
 
 -- -------------------- PROCESSES UTILITY --------------------
 -- [nice] { _last_run, [{Process}] }
-local processes = { [0] = { _last_run = 0 }}
+local processes = { [0] = { _last_run = 0, _suspended = {} }}
 local proc_id = 1 -- 0 reserved for kernel
 local nice = 0
 local priorities = {0}
@@ -436,6 +453,8 @@ local function start(process, ...)
 		else
 			proc.state = ProcState.ERROR
 		end
+
+		proc.msg = msg
 	end)
 	if proc.proc == nil then return nil, "Could not create coroutine" end
 
@@ -455,6 +474,13 @@ local function getProcById(pid)
 
 	for priority, plist in pairs(processes) do
 		for _, proc in ipairs(plist) do
+			if proc.pid == pid then
+				return proc, priority
+			end
+		end
+
+		-- Also check suspended processes
+		for _, proc in ipairs(plist._suspended) do
 			if proc.pid == pid then
 				return proc, priority
 			end
@@ -484,6 +510,12 @@ local function resume(pid)
 	local proc, msg = checkPID(pid)
 	if proc == nil then return false, msg end
 
+	-- Suspended processes are in a different table
+	if proc.state == ProcState.SUSPEND then
+		table.insert(processes[msg], proc)
+		table.remove(processes[msg]._suspended, table.find(processes[msg]._suspended, proc))
+	end
+
 	proc.state = ProcState.RUN
 
 	return true
@@ -496,6 +528,10 @@ local function suspend(pid)
 	if proc == nil then return false, msg end
 
 	proc.state = ProcState.SUSPEND
+
+	-- Move suspended processes to a separate table
+	table.insert(processes[msg]._suspended, proc)
+	table.remove(processes[msg], table.find(processes[msg], proc))
 
 	return true
 end
@@ -521,7 +557,7 @@ local function priority(pid, nice)
 		table.insert(priorities, nice)
 		table.sort(priorities)
 
-		processes[nice] = { _last_run = 0 }
+		processes[nice] = { _last_run = 0, _suspended = {} }
 	end
 
 	local proc, msg = checkPID(pid)
@@ -541,6 +577,16 @@ local function process_list()
 
 	for nice, procList in pairs(processes) do
 		for _, proc in ipairs(procList) do
+			table.insert(procs, {
+				nice = nice,
+				pid = proc.pid,
+				state = stateToStr(proc.state),
+				args = table.concat2(proc.args, " ")
+			})
+		end
+
+		-- Also list suspended processes
+		for _, proc in ipairs(procList._suspended) do
 			table.insert(procs, {
 				nice = nice,
 				pid = proc.pid,
@@ -620,6 +666,20 @@ local yieldPeriod = 2
 
 local _iterations = 0
 
+local function sched_event(single)
+	if requeueEvents(single) > 0 then
+		local g, msg = instance.resume(0)
+	end
+end
+local function sched_yield(quick)
+	if quick then
+		os.queueEvent("_kernel", "sched_yield")
+	end
+
+	sched_event(true)
+	lastYield = os.clock()
+end
+
 -- Priority scheduler
 -- Runs each item in a level before running an item in a higher (lower priority) level
 -- Example { [-1]#2, [0]#3, [1]#2, [2]#1 }:
@@ -632,14 +692,23 @@ local _iterations = 0
 local function sched_next()
 	local level = 1
 	local procList = processes[priorities[level]]
+	local is_suspended = {}
+
+	-- Grab all available events
+	sched_event(false)
 
 	_iterations = _iterations + 1
 
 	-- Walk up each level until we find a process to run
-	while procList ~= nil and procList._last_run >= #procList do
+	while procList ~= nil and not is_suspended[level] and procList._last_run >= #procList do
 		-- Remove empty levels
 		if #procList == 0 then
-			table.remove(priorities, level)
+			-- If all processes are suspended, level wil appear empty, but should not be deleted
+			if #procList._suspended > 0 then
+				is_suspended[level] = true
+			else
+				table.remove(priorities, level)
+			end
 		else
 			level = level + 1
 
@@ -659,6 +728,12 @@ local function sched_next()
 	-- If we ran out of levels, there's nothing else to do
 	if procList == nil then return false end
 
+	-- If there are only suspended processes, wait for an event and try again
+	if is_suspended[level] then
+		sched_yield()
+		return true
+	end
+
 	-- Run the process we found
 	local toRun = procList._last_run + 1
 	local proc = procList[toRun]
@@ -666,23 +741,7 @@ local function sched_next()
 
 	-- Yield regularly to keep CC happy
 	if os.clock() - lastYield >= yieldPeriod then
-		lastYield = os.clock()
-		os.queueEvent("_kernel", "sched_yield")
-		getEvent(false)
-	else
-		-- Wait for an event if we've spent too long on suspended processes
-		if proc.state == ProcState.SUSPEND then
-			suspend_count = suspend_count + 1
-			if suspend_count > #priorities * table.len(processes, 2) then
-				-- TODO: Run full check on process table to see if everything is suspended first
-				-- TODO: Move suspended tasks to separate table/list?
-				suspend_count = 0
-				getEvent(false)
-				lastYield = os.clock()
-			end
-		else
-			suspend_count = 0
-		end
+		sched_yield(true)
 	end
 
 	if not proc:run() then
@@ -721,7 +780,7 @@ end
 local function p_kernel(state, require_stop, norep)
 	repeat
 		-- os.pullEventRaw yields
-        local event = getEvent(true)
+        local event = nextEvent()
 
         dispatch_event(event)
         dispatch_event_task(event)
@@ -785,13 +844,10 @@ local function run(require_stop)
 	instance.priority(pid, -10)
 	--instance.suspend(pid)
 
-	local haveProc = true
 	while state.running do
-		if haveProc and not sched_next() then
-			print("Process pool exhausted")
-			haveProc = false
-			--state.exitStatus = "Process pool exhausted"
-			--state.running = false
+		if not sched_next() then
+			state.exitStatus = "Process pool exhausted"
+			state.running = false
 		end
 
 		--p_kernel(state, require_stop, true)
