@@ -16,8 +16,7 @@
 --
 -- To use events with the kernel, register a handler using `kernel.add_handler`.  To run a function once, use
 -- `kernel.add_temp_handler` or `kernel.schedule_on_event`.  Any code outside of a process must be event-driven.  In a
--- process, <<<use `schedule_on_event` containing a call to `kernel.resume(<pid>)` with your process' PID, then call
--- `kernel.suspend(<pid>)`.  TODO: Make a helper for this>>>
+-- process, use the process utility `kernel.event_sleep` to wait for an event.
 --
 --
 --
@@ -717,6 +716,27 @@ local function fork()
 end
 
 
+-- [Process Utility]
+-- Suspends process until event occurs or timeout
+-- Timeout of nil/0 will wait forever
+local function event_sleep(timeout, ...)
+	local pid = current_process.pid
+	if pid == BAD_PID then
+		return false, "Not in a process"
+	end
+
+	instance.suspend(pid)
+
+	-- Resume this process after the specified event or timeout
+	instance.schedule_on_event(function() instance.resume(pid) end, timeout, ...)
+
+	-- Yield the process
+	coroutine.yield()
+
+	return true
+end
+
+
 -- Yield tracker for scheduler.  Because it's running coroutines that yield, it doesn't actually yield automatically
 local lastYield
 -- Yield period in seconds
@@ -956,6 +976,7 @@ instance = {
 	sleep = sleep,
 	wait = wait, -- Use the kernel/process_complete event outside of a process
 	fork = fork,
+	event_sleep = event_sleep,
 
 	-- Manage interface classes
 	add_interface = add_interface,
