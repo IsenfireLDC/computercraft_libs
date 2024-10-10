@@ -1,28 +1,79 @@
 -- <<<mltable|table_extensions>>>
+-- =====================================================================================================================
+-- Kernel
+-- =====================================================================================================================
+-- Provides utilities for handling events, scheduling functions, and multiprocessing.
+--
+-- !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! IMPORTANT !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+-- DO NOT CALL THE FOLLOWING FUNCTIONS:
+--     os.pullEvent
+--     os.pullEventRaw
+--
+-- The kernel will handle all events.  Calling one of these functions in an event handler or task (especially with a
+-- filter) will likely cause event handlers not to be called, timeouts to be ignored, and other bad things.  Calling
+-- these in a process will cause your process to hang forever, and kernel to use significant resources attempting to
+-- schedule it.
+--
+-- To use events with the kernel, register a handler using `kernel.add_handler`.  To run a function once, use
+-- `kernel.add_temp_handler` or `kernel.schedule_on_event`.  Any code outside of a process must be event-driven.  In a
+-- process, <<<use `schedule_on_event` containing a call to `kernel.resume(<pid>)` with your process' PID, then call
+-- `kernel.suspend(<pid>)`.  TODO: Make a helper for this>>>
+--
+--
+--
+-- Subsystem Summaries
+-- =====================================================================================================================
 -- Generic Event Loop
--- Handles events based on user-provided handlers
+-- ---------------------------------------------------------------------------------------------------------------------
+-- Allows functions to be registered as handlers for given events.  Automatically runs all registered handlers whenever
+-- an event is fired.  
 --
--- -------------------- EVENTS --------------------
--- Pulls all events, including 'raw' events
+-- Tasks Utility
+-- ---------------------------------------------------------------------------------------------------------------------
+-- Runs small functions once or on regular intervals.  Can also functions run on the next instance of an event, with a
+-- timeout.  Tasks can be cancelled using the TID returned when they were scheduled initially.
 --
--- Handles event "stop_kernel"
---     [1] - "stop_kernel"
+-- Processes Utility
+-- ---------------------------------------------------------------------------------------------------------------------
+-- Creates processes from functions by converting them into coroutines.  Processes can be suspended or stopped using the
+-- PID returned when they were started. Uses a priority scheduler for running coroutines (most negative == higest
+-- priority).  It is suggested not to use a higher priority than -10 (priority of event handler process).  The default
+-- priority is 0.
 --
--- Handles specialized version of "terminate"
---     [1] - "terminate"
---     [2] - "stop_kernel"
 --
--- Kernel events:
+--
+-- Interface Documentation
+-- =====================================================================================================================
+-- Events
+-- ---------------------------------------------------------------------------------------------------------------------
+-- Pulls all events, including 'raw' events (terminate).  No user code should try to handle events directly (see
+-- IMPORTANT above).
+--
+-- Handles: <ALL>
+-- stop_kernel - Send a terminate event to all handlers, then queue terminate/stop_kernel
+-- terminate/
+--     stop_kernel - Stop the kernel
+--
+-- Generates:
 -- kernel/
 --     process_complete/
 --         <pid>/ - PID of completed process
 --             stopped - Process was stopped
 --             finished - Process was not stopped
 --
--- -------------------- HANDLERS --------------------
--- Handlers will be fed all parameters of the event in a list
+-- Handlers
+-- ---------------------------------------------------------------------------------------------------------------------
+-- Handlers will be fed all parameters of the event in a list.  An event with parameters my/fun/event will be
+-- passed as { "my", "fun", "event" }.  The handler registration functions require the parameters separately, so to
+-- register a handler for this event, call `kernel.add_handler(func, 0, "my", "fun", "event")`.  Handlers for my/ and
+-- my/fun will also be called, unless they specify a max_depth of 1 or 2.
 --
--- -------------------- TABLES --------------------
+--
+--
+-- Internals Documentation
+-- =====================================================================================================================
+-- Tables
+-- ---------------------------------------------------------------------------------------------------------------------
 -- Task
 --     [task]  - Function to call
 --     [time]  - Delay for call 
@@ -33,24 +84,26 @@
 --     [proc]  - Coroutine to run
 --     [args]  - Arguments passed to the process
 --     [state] - Status <ProcState>
+-- opt [msg]   - Error message (If process errored)
 --
 -- Processes{nice: (entry)}
---     [_last_run] - Index of last process to run at this priority
---     [] - List of processes
+--     [_last_run]  - Index of last process to run at this priority
+--     [_suspended] - List of suspended processes
+--     []           - List of processes
 --
--- -------------------- ENUMS --------------------
+-- Enums
+-- ---------------------------------------------------------------------------------------------------------------------
 -- ProcState
 --     [INIT]    - Not yet run
 --     [RUN]     - Running
 --     [SUSPEND] - Suspended
 --     [STOP]    - Stopped
 --
--- -------------------- PROGRAM --------------------
--- -------------------- PROGRAM --------------------
+-- -------------------- PROGRAM START --------------------
 
 -- Modules
 require("apis/mltable")
--- TODO: require("extensions/table")
+-- TODO: Move extensions to different directory: require("extensions/table")
 require("apis/table_extensions")
 
 -- Settings
@@ -71,15 +124,15 @@ local running = false
 -- Handler should expect a list of arguments as a table
 -- All registered handlers will be called
 local function add_handler(handler, max_level, ...)
-    max_level = max_level or 0
+	max_level = max_level or 0
 
-    event_handlers:add(handler, max_level, ...)
+	event_handlers:add(handler, max_level, ...)
 end
 
 -- Removes the given handler from the given event
 -- Pass the event parameters for the event that this was added with
 local function remove_handler(handler, ...)
-    event_handlers:remove(handler, ...)
+	event_handlers:remove(handler, ...)
 end
 
 -- Register an interface class for event handling
@@ -88,42 +141,42 @@ end
 -- Arg method must be a string containing the method name
 -- NOTE: Only one method per class per event
 local function add_interface(class, method, ...)
-    if not class or not method then
-        return false, "Missing class or method"
-    end
+	if not class or not method then
+		return false, "Missing class or method"
+	end
 
-    event_interfaces:add(class, method, ...)
+	event_interfaces:add(class, method, ...)
 
-    return true
+	return true
 end
 
 -- Remove an interface class method
 local function remove_interface(class, method, ...)
-    if not class or not method then return end
+	if not class or not method then return end
 
-    event_interfaces:remove(class, method, ...)
+	event_interfaces:remove(class, method, ...)
 end
 
 
 -- [Helper]
 -- Handles dispatching events
 local function dispatch_event(event)
-    local handlers = event_handlers:get_all_set(table.unpack(event))
+	local handlers = event_handlers:get_all_set(table.unpack(event))
 
-    -- Only call event handlers at or below their max depth
-    for handler,lev in pairs(handlers) do
-        if lev == 0 or #event <= lev then
-            handler(event)
-        end
-    end
+	-- Only call event handlers at or below their max depth
+	for handler,lev in pairs(handlers) do
+		if lev == 0 or #event <= lev then
+			handler(event)
+		end
+	end
 
 
-    -- Also dispatch events to interfaces
-    local interfaces = event_interfaces:get_all_set(table.unpack(event))
+	-- Also dispatch events to interfaces
+	local interfaces = event_interfaces:get_all_set(table.unpack(event))
 
-    for instance,method in pairs(interfaces) do
-        method(instance, event)
-    end
+	for instance,method in pairs(interfaces) do
+		method(instance, event)
+	end
 end
 
 
@@ -174,180 +227,181 @@ local last_tid = 0
 -- [Helper]
 -- Gets the next available task id
 local function next_tid()
-    last_tid = last_tid + 1
+	last_tid = last_tid + 1
 
-    return last_tid
+	return last_tid
 end
 
 -- [Handler]
 -- Handles calling a scheduled task on a timer event
 local function h_task(event)
-    if not event[2] then return end
+	if not event[2] then return end
 
-    local task = tasks[event[2]]
-    if not task or not task.task then return end
+	local task = tasks[event[2]]
+	if not task or not task.task then return end
 
-    task.task()
+	task.task()
 
-    if task.every ~= nil then
-        instance.schedule(task.task, task.every, task.every, task.tid)
-    else
-        rtasks[task.tid] = nil
-    end
+	if task.every ~= nil then
+		instance.schedule(task.task, task.every, task.every, task.tid)
+	else
+		rtasks[task.tid] = nil
+	end
 
-    tasks[event[2]] = nil
+	tasks[event[2]] = nil
 end
 
 -- [Utility]
 -- Schedules a function as a task
 local function schedule(task, time, every, tid)
-    if not task or time == nil then return nil end
-    tid = tid or next_tid()
+	if not task or time == nil then return nil end
+	tid = tid or next_tid()
 
-    local timer = os.startTimer(time)
-    tasks[timer] = {
-        tid = tid,
-        task = task,
-        time = time,
-        every = every
-    }
+	local timer = os.startTimer(time)
+	tasks[timer] = {
+		tid = tid,
+		task = task,
+		time = time,
+		every = every
+	}
 
-    rtasks[tid] = timer
+	rtasks[tid] = timer
 
-    return tid
+	return tid
 end
 
 
 -- [Helper]
 -- Handles dispatching tasks waiting on events
 local function dispatch_event_task(event)
-    -- TEMP HANDLERS
-    -- Call any temporary handlers
-    local handlers = temp_handlers:get_all_set(table.unpack(event))
+	-- TEMP HANDLERS
+	-- Call any temporary handlers
+	local handlers = temp_handlers:get_all_set(table.unpack(event))
 
-    -- Only call event handlers at or below their max depth
-    for handler,tid in pairs(handlers) do
-        handler(event)
+	-- Run and cancel timeouts for handlers
+	for handler,tid in pairs(handlers) do
+		handler(event)
 
-        if tid > 0 then
-            os.cancelTimer(tid)
-            waiting_timeouts[tid] = nil
-        end
-    end
+		if tid > 0 then
+			os.cancelTimer(tid)
+			waiting_timeouts[tid] = nil
+		end
+	end
 
-    -- Remove called handlers
-    temp_handlers:remove_all(table.unpack(event))
+	-- Remove called handlers
+	temp_handlers:remove_all(table.unpack(event))
 
 
-    -- TASKS
-    -- Call any waiting tasks
-    local waiting = waiting_on_event:get_all_set(table.unpack(event))
+	-- TASKS
+	-- Call any waiting tasks
+	local waiting = waiting_on_event:get_all_set(table.unpack(event))
 
-    -- Cancel timeouts for any called tasks
-    for task,tid in pairs(waiting) do
-        task(true)
+	-- Cancel timeouts for any called tasks
+	for task,tid in pairs(waiting) do
+		task(true)
 
-        if tid > 0 then
-            os.cancelTimer(tid)
-            waiting_timeouts[tid] = nil
-        end
-    end
+		if tid > 0 then
+			os.cancelTimer(tid)
+			waiting_timeouts[tid] = nil
+		end
+	end
 
-    -- Delete all tasks that were called
-    waiting_on_event:remove_all(table.unpack(event))
+	-- Delete all tasks that were called
+	waiting_on_event:remove_all(table.unpack(event))
 end
 
 -- [Handler]
 -- Handles timer events and removes events if they time out
 local function h_task_timeout(event)
-    local task_info = waiting_timeouts[event[2]]
-    
-    -- Cancel the task if it is waiting
-    if task_info then
-        task_info.handler(false)
+	local task_info = waiting_timeouts[event[2]]
+	
+	-- Cancel the task if it is waiting
+	if task_info then
+		-- TODO: Is this correct behavior?
+		task_info.handler(false)
 
-        waiting_on_event:remove(task_info.handler, table.unpack(task_info.path))
-        rtasks[task_info.tid] = nil
-    end
+		waiting_on_event:remove(task_info.handler, table.unpack(task_info.path))
+		rtasks[task_info.tid] = nil
+	end
 
-    waiting_timeouts[event[2]] = nil
+	waiting_timeouts[event[2]] = nil
 end
 
 -- [Utility]
 -- Calls a function on an event once
 -- Will wait forever if timout is 0 or nil
 local function schedule_on_event(task, timeout, ...)
-    if not task then return end
-    local tid = next_tid()
+	if not task then return end
+	local tid = next_tid()
 
-    local vargs = { ... }
+	local vargs = { ... }
 
-    -- Setup timeout, if requested
-    local timer = -1
-    if timeout then
-        timer = os.startTimer(timeout)
+	-- Setup timeout, if requested
+	local timer = -1
+	if timeout then
+		timer = os.startTimer(timeout)
 
-        waiting_timeouts[timer] = {
-            tid = tid,
-            handler = task,
-            path = vargs
-        }
-    end
+		waiting_timeouts[timer] = {
+			tid = tid,
+			handler = task,
+			path = vargs
+		}
+	end
 
-    -- Note: Had vargs here for aiding in deletion, re-add if necessary
-    waiting_on_event:add(task, timer, ...)
+	-- Note: Had vargs here for aiding in deletion, re-add if necessary
+	waiting_on_event:add(task, timer, ...)
 
-    rtasks[tid] = {task=task, timer=timer, path=vargs}
+	rtasks[tid] = {task=task, timer=timer, path=vargs}
 
-    return tid
+	return tid
 end
 
 -- [Utility]
 -- Cancels a scheduled task
 local function cancel(task_id)
-    if not task_id then return end
+	if not task_id then return end
 
-    local meta = rtasks[task_id]
-    if not meta then return end
+	local meta = rtasks[task_id]
+	if not meta then return end
 
-    -- Event task
-    if type(meta) == "table" then
-        if meta.timer then
-            os.cancelTimer(meta.timer)
-            waiting_timeouts[meta.timer] = nil
-        end
+	-- Event task
+	if type(meta) == "table" then
+		if meta.timer then
+			os.cancelTimer(meta.timer)
+			waiting_timeouts[meta.timer] = nil
+		end
 
-        waiting_on_event:remove(meta.task, table.unpack(meta.path))
-    
-    -- Normal task
-    else
-        os.cancelTimer(meta)
-        tasks[meta] = nil
-        rtasks[task_id] = nil
-    end
+		waiting_on_event:remove(meta.task, table.unpack(meta.path))
+	
+	-- Normal task
+	else
+		os.cancelTimer(meta)
+		tasks[meta] = nil
+		rtasks[task_id] = nil
+	end
 end
 
 
 -- [Utility]
 -- Sets a one-time temporary handler for a specific event
 local function add_temp_handler(handler, timeout, ...)
-    if not handler then return end
+	if not handler then return end
 
-    local vargs = { ... }
+	local vargs = { ... }
 
-    -- Setup timeout, if requested
-    local tid = -1
-    if timeout then
-        tid = os.startTimer(timeout)
+	-- Setup timeout, if requested
+	local tid = -1
+	if timeout then
+		tid = os.startTimer(timeout)
 
-        waiting_timeouts[tid] = {
-            handler = handler,
-            path = vargs
-        }
-    end
+		waiting_timeouts[tid] = {
+			handler = handler,
+			path = vargs
+		}
+	end
 
-    -- Note: Had vargs here for aiding in deletion, re-add if necessary
-    temp_handlers:add(handler, tid, ...)
+	-- Note: Had vargs here for aiding in deletion, re-add if necessary
+	temp_handlers:add(handler, tid, ...)
 end
 
 -- -------------------- END TASKS UTILITY --------------------
@@ -355,10 +409,10 @@ end
 
 
 -- -------------------- PROCESSES UTILITY --------------------
--- [nice] { _last_run, [{Process}] }
+-- [nice] { _last_run, _suspended[{Process}], [{Process}] }
 local processes = { [0] = { _last_run = 0, _suspended = {} }}
 local proc_id = 1 -- 0 reserved for kernel
-local nice = 0
+local nice = 0 -- Initial priority for new processes
 local priorities = {0}
 
 local BAD_PID = -1
@@ -389,10 +443,10 @@ local Process = {
 function Process:new(obj)
 	obj = obj or {}
 
-    setmetatable(obj, self)
-    self.__index = self
+	setmetatable(obj, self)
+	self.__index = self
 
-    return obj
+	return obj
 end
 function Process:__eq(other)
 	return self.pid == other.pid
@@ -412,6 +466,9 @@ function Process:run()
 	return coroutine.status(self.proc) ~= "dead"
 end
 
+
+-- Currently running process
+-- Set by scheduler and used in process utilities
 local current_process = Process
 
 -- [Helper]
@@ -548,7 +605,7 @@ local function stop(pid)
 end
 
 -- [Utility]
--- Sets process priority
+-- Sets process priority; most negative is highest priority
 local function priority(pid, nice)
 	nice = nice or 0
 
@@ -640,6 +697,7 @@ end
 
 -- [Process Utility]
 -- Creates a copy of the current process
+-- TODO: Untested, seems super jank and unlikely to work
 local function fork()
 	local pid = current_process.pid
 	if pid == BAD_PID then
@@ -664,13 +722,21 @@ local lastYield
 -- Yield period in seconds
 local yieldPeriod = 2
 
+-- Scheduler iteration count, used for testing performance (down from 4M to 13 on a test program :D)
 local _iterations = 0
 
+-- [Helper]
+-- Requeue events and wake the event handler process if there were any
 local function sched_event(single)
 	if requeueEvents(single) > 0 then
 		local g, msg = instance.resume(0)
 	end
 end
+-- [Helper]
+-- An event handling a day keeps the "Too long without yielding" away!
+-- Yields from the kernel to CC so we can keep running
+-- Quick mode queues an event so the scheduler is guaranteed to restart immediately
+-- Non-quick mode yields until the next natural event for when all processes are suspended
 local function sched_yield(quick)
 	if quick then
 		os.queueEvent("_kernel", "sched_yield")
@@ -780,56 +846,56 @@ end
 local function p_kernel(state, require_stop, norep)
 	repeat
 		-- os.pullEventRaw yields
-        local event = nextEvent()
+		local event = nextEvent()
 
-        dispatch_event(event)
-        dispatch_event_task(event)
+		dispatch_event(event)
+		dispatch_event_task(event)
 
-        -- Send a terminate event before exiting
-        if event[1] == "stop_kernel" then
-            os.queueEvent("terminate", "stop_kernel")
-        end
+		-- Send a terminate event before exiting
+		if event[1] == "stop_kernel" then
+			os.queueEvent("terminate", "stop_kernel")
+		end
 
-        if event[1] == "terminate" then
-            -- If require_stop then exit only on handling the special terminate
-            -- event.  Otherwise exit on any terminate event
-            if not require_stop or event[2] == "stop_kernel" then
-                state.running = false
-                state.exitStatus = "Kernel stopped"
-            end
-        end
+		if event[1] == "terminate" then
+			-- If require_stop then exit only on handling the special terminate
+			-- event.  Otherwise exit on any terminate event
+			if not require_stop or event[2] == "stop_kernel" then
+				state.running = false
+				state.exitStatus = "Kernel stopped"
+			end
+		end
 	until norep or not state.running
 end
 
 -- [Utility]
 -- If kernel is not running, handles events until the given event happens
 local function run_until_event(timeout, ...)
-    if not running then
-        local function did_run(success) end
-        schedule_on_event(did_run, timeout, ...)
+	if not running then
+		local function did_run(success) end
+		schedule_on_event(did_run, timeout, ...)
 
-        -- Handle events until task is triggered or times out
-        while waiting_on_event:get(did_run, ...) do
-            local event = {os.pullEventRaw()}
+		-- Handle events until task is triggered or times out
+		while waiting_on_event:get(did_run, ...) do
+			local event = {os.pullEventRaw()}
 
-            dispatch_event(event)
-            dispatch_event_task(event)
-        end
-    end
+			dispatch_event(event)
+			dispatch_event_task(event)
+		end
+	end
 end
 
 
 -- Performs system-wide initialization
 local function init()
-    -- Seed RNG
-    math.randomseed(os.computerID() * os.clock() + os.computerID())
+	-- Seed RNG
+	math.randomseed(os.computerID() * os.clock() + os.computerID())
 end
 
 -- Main program
 -- Handle events with registered handlers
 local function run(require_stop)
-    instance.add_handler(h_task, 0, "timer")
-    instance.add_handler(h_task_timeout, 0, "timer")
+	instance.add_handler(h_task, 0, "timer")
+	instance.add_handler(h_task_timeout, 0, "timer")
 
 	local state = {
 		running = true,
@@ -853,7 +919,7 @@ local function run(require_stop)
 		--p_kernel(state, require_stop, true)
 	end
 
-    return state.exitStatus, _iterations
+	return state.exitStatus, _iterations
 end
 
 local function terminate()
@@ -862,22 +928,22 @@ end
 
 -- Returns the running status flag
 local function is_running()
-    return running
+	return running
 end
 
 -- Initialize system
 init()
 
 instance = {
-    -- Manage event handlers
-    add_handler = add_handler,
-    remove_handler = remove_handler,
-    add_temp_handler = add_temp_handler, -- Part of tasks utility, but handles event and cannot be canceled
+	-- Manage event handlers
+	add_handler = add_handler,
+	remove_handler = remove_handler,
+	add_temp_handler = add_temp_handler, -- Part of tasks utility, but handles event and cannot be canceled
 
-    -- Tasks utility
-    schedule = schedule,
-    schedule_on_event = schedule_on_event,
-    cancel = cancel,
+	-- Tasks utility
+	schedule = schedule,
+	schedule_on_event = schedule_on_event,
+	cancel = cancel,
 
 	-- Processes utility
 	start = start,
@@ -891,15 +957,15 @@ instance = {
 	wait = wait, -- Use the kernel/process_complete event outside of a process
 	fork = fork,
 
-    -- Manage interface classes
-    add_interface = add_interface,
-    remove_interface = remove_interface,
+	-- Manage interface classes
+	add_interface = add_interface,
+	remove_interface = remove_interface,
 
-    -- Run the kernel
-    run_until_event = run_until_event,
-    run = run,
+	-- Run the kernel
+	run_until_event = run_until_event,
+	run = run,
 	terminate = terminate,
-    is_running = is_running
+	is_running = is_running
 }
 
 return instance
