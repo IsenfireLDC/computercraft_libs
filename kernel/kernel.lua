@@ -569,11 +569,11 @@ local function changeState(proc, nice, state)
 	if proc.state == ProcState.SUSPEND then
 		if state == ProcState.SUSPEND then return end
 
-		table.insert(processes[msg], proc)
-		table.remove(processes[msg]._suspended, table.find(processes[msg]._suspended, proc))
+		table.insert(processes[nice], proc)
+		table.remove(processes[nice]._suspended, table.find(processes[nice]._suspended, proc))
 	elseif state == ProcState.SUSPEND then
-		table.insert(processes[msg]._suspended, proc)
-		table.remove(processes[msg], table.find(processes[msg], proc))
+		table.insert(processes[nice]._suspended, proc)
+		table.remove(processes[nice], table.find(processes[nice], proc))
 	end
 
 	proc.state = state
