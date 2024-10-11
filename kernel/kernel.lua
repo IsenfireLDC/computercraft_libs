@@ -25,19 +25,23 @@
 -- Generic Event Loop
 -- ---------------------------------------------------------------------------------------------------------------------
 -- Allows functions to be registered as handlers for given events.  Automatically runs all registered handlers whenever
--- an event is fired.  
+-- an event is fired.  Handlers will be called for any matching events of equal or higher depth.  The depth of an event
+-- is the number of parameters in the event, so an event my/fun/event would have a depth of 3.  If the max_level was set
+-- when adding the handler, the handler will be only be called for matching events up to that depth.
 --
 -- Tasks Utility
 -- ---------------------------------------------------------------------------------------------------------------------
--- Runs small functions once or on regular intervals.  Can also functions run on the next instance of an event, with a
--- timeout.  Tasks can be cancelled using the TID returned when they were scheduled initially.
+-- Runs small functions once or on regular intervals.  The delay before the first run and the period can be different,
+-- but the period cannot be changed.  Can also functions run on the next instance of an event, with a timeout.  Tasks
+-- can be cancelled using the TID returned when they were scheduled initially.
 --
 -- Processes Utility
 -- ---------------------------------------------------------------------------------------------------------------------
--- Creates processes from functions by converting them into coroutines.  Processes can be suspended or stopped using the
--- PID returned when they were started. Uses a priority scheduler for running coroutines (most negative == higest
--- priority).  It is suggested not to use a higher priority than -10 (priority of event handler process).  The default
--- priority is 0.
+-- Creates processes from functions by converting them into coroutines.  Processes can be suspended, resumed, have
+-- priority changed, or stopped using the PID returned when they were started. Uses a priority scheduler for running
+-- coroutines (most negative == higest priority).  It is suggested not to use a higher priority than -10 (priority of
+-- event handler process).  The default priority is 0.  The process utility functions do not need a PID, they will
+-- automatically pull it from the running process.
 --
 --
 --
@@ -558,6 +562,23 @@ local function checkPID(pid, nostop)
 	return proc, priority
 end
 
+-- [Helper]
+-- Moves process to the appropriate process list
+local function changeState(proc, nice, state)
+	-- Suspended processes are in a sub-list
+	if proc.state == ProcState.SUSPEND then
+		if state == ProcState.SUSPEND then return end
+
+		table.insert(processes[msg], proc)
+		table.remove(processes[msg]._suspended, table.find(processes[msg]._suspended, proc))
+	elseif state == ProcState.SUSPEND then
+		table.insert(processes[msg]._suspended, proc)
+		table.remove(processes[msg], table.find(processes[msg], proc))
+	end
+
+	proc.state = state
+end
+
 
 
 -- [Utility]
@@ -566,13 +587,7 @@ local function resume(pid)
 	local proc, msg = checkPID(pid)
 	if proc == nil then return false, msg end
 
-	-- Suspended processes are in a different table
-	if proc.state == ProcState.SUSPEND then
-		table.insert(processes[msg], proc)
-		table.remove(processes[msg]._suspended, table.find(processes[msg]._suspended, proc))
-	end
-
-	proc.state = ProcState.RUN
+	changeState(proc, msg, ProcState.RUN)
 
 	return true
 end
@@ -583,11 +598,7 @@ local function suspend(pid)
 	local proc, msg = checkPID(pid)
 	if proc == nil then return false, msg end
 
-	proc.state = ProcState.SUSPEND
-
-	-- Move suspended processes to a separate table
-	table.insert(processes[msg]._suspended, proc)
-	table.remove(processes[msg], table.find(processes[msg], proc))
+	changeState(proc, msg, ProcState.SUSPEND)
 
 	return true
 end
@@ -598,7 +609,7 @@ local function stop(pid)
 	local proc, msg = checkPID(pid, false)
 	if proc == nil then return false, msg end
 
-	proc.state = ProcState.STOP
+	changeState(proc, msg, ProcState.STOP)
 
 	return true
 end
@@ -619,8 +630,12 @@ local function priority(pid, nice)
 	local proc, msg = checkPID(pid)
 	if proc == nil then return false, msg end
 
+	-- Temporarily move to run state to ensure the process is in the normal list
+	local state = proc.state
+	changeState(proc, msg, ProcState.RUN)
 	table.insert(processes[nice], proc)
 	table.remove(processes[msg], table.find(processes[msg], proc))
+	changeState(proc, msg, state)
 
 	return true
 end
