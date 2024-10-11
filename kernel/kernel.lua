@@ -876,6 +876,30 @@ end
 
 
 
+-- -------------------- MISC UTILITY --------------------
+-- [Utility]
+-- Runs a function atomically (without yielding to CC)
+local function atomic(func)
+	local status = {}
+	local c = coroutine.create(function()
+		local g, msg = pcall(func)
+
+		status.g = g
+		status.msg = msg
+	end)
+
+	repeat
+		coroutine.resume(c)
+	until coroutine.status(c) == "dead"
+
+	return status.g, status.msg
+end
+-- -------------------- END MISC UTILITY --------------------
+
+
+
+
+-- -------------------- KERNEL MAIN --------------------
 -- [Process]
 -- Process 0(priority -10): runs event handlers
 local function p_kernel(state, require_stop, norep)
@@ -966,6 +990,9 @@ local function is_running()
 	return running
 end
 
+
+
+
 -- Initialize system
 init()
 
@@ -996,6 +1023,9 @@ instance = {
 	-- Manage interface classes
 	add_interface = add_interface,
 	remove_interface = remove_interface,
+
+	-- Misc utilites
+	atomic = atomic,
 
 	-- Run the kernel
 	run_until_event = run_until_event,
