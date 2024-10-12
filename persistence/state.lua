@@ -2,15 +2,16 @@
 -- State Persistence
 -- TODO: Support entries of multiple sizes
 
+local serialize = require("apis/serialize")
+
 State = {
 	file = nil,
 	data = {},
-	keys = { [0] = {} },
+	keys = { [1] = {} },
 
 	_maxKey = 0,
-	_maxLevel = 0
+	_maxLevel = 1
 }
-
 
 -- [Helper]
 -- Gets key index from keys lists
@@ -35,6 +36,12 @@ end
 -- Index function for state, converts name to index
 -- TODO: Can this be replaced with state.data?
 local function getVal(state, key)
+	-- Pass reads through if possible
+	local val = State[key]
+	if val ~= nil then
+		return val
+	end
+
 	local index = getIndex(state, key)
 	if index == nil then return nil end
 
@@ -47,7 +54,7 @@ local function setVal(state, key, value)
 	local index = getIndex(state, key)
 	if index == nil then return nil end
 
-	return state:set(index, value)
+	state:set(index, value)
 end
 
 
@@ -88,7 +95,7 @@ function State.init(filename, keys)
 	return State:new{
 		file = file,
 		data = data,
-		keys = { [0] = keys },
+		keys = { [1] = keys },
 		_maxLevel = 1,
 		_maxKey = #keys - 1
 	}
@@ -103,11 +110,11 @@ function State:set(index, value)
 
 	self.data[index] = value
 
-	if key > self._maxKey then
-		self._maxKey = key
+	if index > self._maxKey then
+		self._maxKey = index
 	end
 
-	self.file:seek("set", index * 4)
+	self.file:seek("set", (index - 1) * 4)
 	self.file:write(serialize.serialize(value))
 end
 
