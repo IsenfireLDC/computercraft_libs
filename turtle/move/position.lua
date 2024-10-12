@@ -139,11 +139,31 @@ local function nextPos(position, orientation)
 	return position
 end
 
+
+-- Convert coordinate systems
+local function toMC(position)
+	return Vector3:new{
+		x = position.x,
+		y = position.z,
+		z = -position.y
+	}
+end
+local function toAPI(position)
+	return Vector3:new{
+		x = position.x,
+		y = -position.z,
+		z = position.y
+	}
+end
+
 instance = {
 	relativePos = relativePos,
 	relativeDir = relativeDir,
 	nextPos = nextPos,
-	nextDir = relativeDir
+	nextDir = relativeDir,
+
+	toMC = toMC,
+	toAPI = toAPI
 }
 
 return instance
