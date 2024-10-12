@@ -879,10 +879,10 @@ end
 -- -------------------- MISC UTILITY --------------------
 -- [Utility]
 -- Runs a function atomically (without yielding to CC)
-local function atomic(func)
+local function atomic(func, ...)
 	local status = {}
 	local c = coroutine.create(function()
-		local g, msg = pcall(func)
+		local g, msg = pcall(func, ...)
 
 		status.g = g
 		status.msg = msg
