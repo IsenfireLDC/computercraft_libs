@@ -21,12 +21,12 @@ end
 function MLTable:add(key, value, ...)
     local vargs = {...}
 
+	if #vargs == 0 then
+		vargs = {"_ANY"}
+	end
+
     local level = self
     for _,arg in ipairs(vargs) do
-        if arg == nil then
-            arg = "_any"
-        end
-
         local next_level = level[arg]
         if not next_level then
             level[arg] = {}
@@ -48,10 +48,6 @@ function MLTable:remove(key, ...)
 
     local level = self
     for _,arg in ipairs(vargs) do
-        if arg == nil then
-            arg = "_any"
-        end
-
         local next_level = level[arg]
         if not next_level then
             return
@@ -149,7 +145,7 @@ function MLTable:get_all_set(...)
     local level = self
     local i = 1
 
-    -- Recursive function to build set using _any and given arguments
+    -- Recursive function to build set using _ANY and given arguments
     -- Was too lazy to figure out how to do this with a stack
     -- TODO: Maybe a queue-based implementation would make sense?
     local build_set
@@ -160,8 +156,8 @@ function MLTable:get_all_set(...)
             end
         end
 
-        if level._any then
-            build_set(level._any, i+1)
+        if level._ANY then
+            build_set(level._ANY, i+1)
         elseif vargs[i] ~= nil and level[vargs[i]] then
             build_set(level[vargs[i]], i+1)
         end
