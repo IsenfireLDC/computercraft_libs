@@ -109,78 +109,16 @@ require("apis/mltable")
 -- TODO: Move extensions to different directory: require("extensions/table")
 require("apis/table_extensions")
 
+local events = require("apis/kernel/events")
+
 -- Settings
 
 -- Globals
 -- Table to be filled with functions
 local instance = {}
 
-local event_handlers = MLTable:new()
-local event_interfaces = MLTable:new()
-
 -- Status flag
 local running = false
-
-
--- Adds a handler for any event types
--- Pass the event parameters for the event that this will handle
--- Handler should expect a list of arguments as a table
--- All registered handlers will be called
-local function add_handler(handler, max_level, ...)
-	max_level = max_level or 0
-
-	event_handlers:add(handler, max_level, ...)
-end
-
--- Removes the given handler from the given event
--- Pass the event parameters for the event that this was added with
-local function remove_handler(handler, ...)
-	event_handlers:remove(handler, ...)
-end
-
--- Register an interface class for event handling
--- Will dispatch handled events to the requested method
---
--- Arg method must be a string containing the method name
--- NOTE: Only one method per class per event
-local function add_interface(class, method, ...)
-	if not class or not method then
-		return false, "Missing class or method"
-	end
-
-	event_interfaces:add(class, method, ...)
-
-	return true
-end
-
--- Remove an interface class method
-local function remove_interface(class, method, ...)
-	if not class or not method then return end
-
-	event_interfaces:remove(class, method, ...)
-end
-
-
--- [Helper]
--- Handles dispatching events
-local function dispatch_event(event)
-	local handlers = event_handlers:get_all_set(table.unpack(event))
-
-	-- Only call event handlers at or below their max depth
-	for handler,lev in pairs(handlers) do
-		if lev == 0 or #event <= lev then
-			handler(event)
-		end
-	end
-
-
-	-- Also dispatch events to interfaces
-	local interfaces = event_interfaces:get_all_set(table.unpack(event))
-
-	for instance,method in pairs(interfaces) do
-		method(instance, event)
-	end
-end
 
 
 local eventQueue = {}
@@ -214,220 +152,18 @@ local function nextEvent()
 end
 
 
--- -------------------- TASKS UTILITY --------------------
--- Scheduled tasks list
--- [timer_id] {Task}
-local tasks = {}
-local rtasks = {}
-
--- Event tasks & temp handlers
-local waiting_on_event = MLTable:new()
-local temp_handlers = MLTable:new()
-local waiting_timeouts = {}
-
-local last_tid = 0
-
--- [Helper]
--- Gets the next available task id
-local function next_tid()
-	last_tid = last_tid + 1
-
-	return last_tid
-end
-
--- [Handler]
--- Handles calling a scheduled task on a timer event
-local function h_task(event)
-	if not event[2] then return end
-
-	local task = tasks[event[2]]
-	if not task or not task.task then return end
-
-	task.task()
-
-	if task.every ~= nil then
-		instance.schedule(task.task, task.every, task.every, task.tid)
-	else
-		rtasks[task.tid] = nil
-	end
-
-	tasks[event[2]] = nil
-end
-
--- [Utility]
--- Schedules a function as a task
-local function schedule(task, time, every, tid)
-	if not task or time == nil then return nil end
-	tid = tid or next_tid()
-
-	local timer = os.startTimer(time)
-	tasks[timer] = {
-		tid = tid,
-		task = task,
-		time = time,
-		every = every
-	}
-
-	rtasks[tid] = timer
-
-	return tid
-end
-
-
--- [Helper]
--- Handles dispatching tasks waiting on events
-local function dispatch_event_task(event)
-	-- TEMP HANDLERS
-	-- Call any temporary handlers
-	local handlers = temp_handlers:get_all_set(table.unpack(event))
-
-	-- Run and cancel timeouts for handlers
-	for handler,tid in pairs(handlers) do
-		handler(event)
-
-		if tid > 0 then
-			os.cancelTimer(tid)
-			waiting_timeouts[tid] = nil
-		end
-	end
-
-	-- Remove called handlers
-	temp_handlers:remove_all(table.unpack(event))
-
-
-	-- TASKS
-	-- Call any waiting tasks
-	local waiting = waiting_on_event:get_all_set(table.unpack(event))
-
-	-- Cancel timeouts for any called tasks
-	for task,tid in pairs(waiting) do
-		task(true)
-
-		if tid > 0 then
-			os.cancelTimer(tid)
-			waiting_timeouts[tid] = nil
-		end
-	end
-
-	-- Delete all tasks that were called
-	waiting_on_event:remove_all(table.unpack(event))
-end
-
--- [Handler]
--- Handles timer events and removes events if they time out
-local function h_task_timeout(event)
-	local task_info = waiting_timeouts[event[2]]
-	
-	-- Cancel the task if it is waiting
-	if task_info then
-		-- TODO: Is this correct behavior?
-		task_info.handler(false)
-
-		waiting_on_event:remove(task_info.handler, table.unpack(task_info.path))
-		rtasks[task_info.tid] = nil
-	end
-
-	waiting_timeouts[event[2]] = nil
-end
-
--- [Utility]
--- Calls a function on an event once
--- Will wait forever if timout is 0 or nil
-local function schedule_on_event(task, timeout, ...)
-	if not task then return end
-	local tid = next_tid()
-
-	local vargs = { ... }
-
-	-- Setup timeout, if requested
-	local timer = -1
-	if timeout then
-		timer = os.startTimer(timeout)
-
-		waiting_timeouts[timer] = {
-			tid = tid,
-			handler = task,
-			path = vargs
-		}
-	end
-
-	-- Note: Had vargs here for aiding in deletion, re-add if necessary
-	waiting_on_event:add(task, timer, ...)
-
-	rtasks[tid] = {task=task, timer=timer, path=vargs}
-
-	return tid
-end
-
--- [Utility]
--- Cancels a scheduled task
-local function cancel(task_id)
-	if not task_id then return end
-
-	local meta = rtasks[task_id]
-	if not meta then return end
-
-	-- Event task
-	if type(meta) == "table" then
-		if meta.timer then
-			os.cancelTimer(meta.timer)
-			waiting_timeouts[meta.timer] = nil
-		end
-
-		waiting_on_event:remove(meta.task, table.unpack(meta.path))
-	
-	-- Normal task
-	else
-		os.cancelTimer(meta)
-		tasks[meta] = nil
-		rtasks[task_id] = nil
-	end
-end
-
-
--- [Utility]
--- Sets a one-time temporary handler for a specific event
-local function add_temp_handler(handler, timeout, ...)
-	if not handler then return end
-
-	local vargs = { ... }
-
-	-- Setup timeout, if requested
-	local tid = -1
-	if timeout then
-		tid = os.startTimer(timeout)
-
-		waiting_timeouts[tid] = {
-			handler = handler,
-			path = vargs
-		}
-	end
-
-	-- Note: Had vargs here for aiding in deletion, re-add if necessary
-	temp_handlers:add(handler, tid, ...)
-end
-
--- -------------------- END TASKS UTILITY --------------------
-
-
-
 -- -------------------- PROCESSES UTILITY --------------------
--- [nice] { _last_run, _suspended[{Process}], [{Process}] }
-local processes = { [0] = { _last_run = 0, _suspended = {} }}
-local proc_id = 1 -- 0 reserved for kernel
-local nice = 0 -- Initial priority for new processes
-local priorities = {0}
-
 local BAD_PID = -1
 
 local ProcState = {
 	INVALID = -1,
 	INIT = 0,
 	RUN = 1,
-	SUSPEND = 2,
-	STOP = 3,
-	FINISH = 4,
-	ERROR = 5
+	WAIT = 2,
+	SUSPEND = 3,
+	STOP = 4,
+	FINISH = 5,
+	ERROR = 6
 }
 
 -- [Helper]
@@ -435,6 +171,13 @@ local ProcState = {
 local function stateToStr(state)
 	return table.getkey(ProcState, state)
 end
+
+
+-- [nice] { _last_run, _suspended[{Process}], [{Process}] }
+local processes = { [0] = { _last_run = 0, _suspended = {} }}
+local g_pid = 1 -- 0 reserved for kernel
+local nice = 0 -- Initial priority for new processes
+local priorities = {0}
 
 
 local Process = {
@@ -459,11 +202,22 @@ function Process:run()
 		return false
 	end
 
+	self.code = {}
 	if self.state == ProcState.INIT then
 		self.state = ProcState.RUN
-		coroutine.resume(self.proc, table.unpack(self.args))
-	elseif self.state == ProcState.RUN then
-		coroutine.resume(self.proc)
+	end
+
+	if self.state == ProcState.RUN then
+		-- TODO: Separate initial/current args?
+		self.code = { coroutine.resume(self.proc, table.unpack(self.args)) }
+		table.remove(self.code, 1)
+
+		self.args = {}
+	end
+
+	-- TODO: Duplicate event queue on all processes?
+	if #self.code > 0 then
+		self.state = ProcState.WAIT
 	end
 
 	return coroutine.status(self.proc) ~= "dead"
@@ -478,13 +232,13 @@ local current_process = Process
 -- Generates next pid
 local pidOverride = BAD_PID
 local function nextPID()
-	local pid = proc_id
+	local pid = g_pid
 
 	if pidOverride >= 0 then
 		pid = pidOverride
 		pidOverride = BAD_PID
 	else
-		proc_id = proc_id + 1
+		g_pid = g_pid + 1
 	end
 
 	return pid
@@ -799,18 +553,22 @@ local function sched_next()
 	sched_event(false)
 
 	_iterations = _iterations + 1
+	if _iterations > 20 then
+		print(getProcById(0))
+		error("ITER LIMIT")
+	end
 
 	-- Walk up each level until we find a process to run
 	while procList ~= nil and not is_suspended[level] and procList._last_run >= #procList do
 		-- Remove empty levels
-		if #procList == 0 then
-			-- If all processes are suspended, level wil appear empty, but should not be deleted
+		if #procList == 0 and #procList._suspended == 0 then
+			table.remove(priorities, level)
+		else
+			-- If processes are suspended, level may appear empty, but should not be deleted
 			if #procList._suspended > 0 then
 				is_suspended[level] = true
-			else
-				table.remove(priorities, level)
 			end
-		else
+
 			level = level + 1
 
 			-- Reset _last_run to 0 so we know to run the first task next time
@@ -839,6 +597,8 @@ local function sched_next()
 	local toRun = procList._last_run + 1
 	local proc = procList[toRun]
 	current_process = proc
+
+	print("K> Running PID "..proc.pid)
 
 	-- Yield regularly to keep CC happy
 	if os.clock() - lastYield >= yieldPeriod then
@@ -880,9 +640,10 @@ end
 -- [Utility]
 -- Runs a function atomically (without yielding to CC)
 local function atomic(func, ...)
+	local vargs = {...}
 	local status = {}
 	local c = coroutine.create(function()
-		local g, msg = pcall(func, ...)
+		local g, msg = pcall(func, table.unpack(vargs))
 
 		status.g = g
 		status.msg = msg
@@ -924,6 +685,10 @@ local function p_kernel(state, require_stop, norep)
 			end
 		end
 	until norep or not state.running
+
+	print("K> ERROR: PROC 0 EXIT")
+	if norep then print("NOREP") end
+	if not state.running then print("NOT RUNNING") end
 end
 
 -- [Utility]
@@ -997,6 +762,15 @@ end
 init()
 
 instance = {
+	-- TODO: THINKING START
+	-- Populate initially or at runtime
+	plugins = { "events", "services" },
+	-- Add/remove plugin functions from table
+	-- Maybe require (and hide) 'dispatch' method
+	events = require("plugins/kernel/events"),
+	services = require("plugins/kernel/services"),
+	-- TODO: THINKING END
+
 	-- Manage event handlers
 	add_handler = add_handler,
 	remove_handler = remove_handler,
