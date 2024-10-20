@@ -183,11 +183,35 @@ local function dispatch_event(event)
 end
 
 
+-- Predeclaration
+local predec = {}
+
+local waiting = {}
 local eventQueue = {}
+local function processEvent()
+	local event = { os.pullEventRaw() }
+	table.insert(eventQueue, event)
+
+	-- TODO: Improve
+	-- Send events to any tasks waiting for one
+	local name = event[1]
+	local procs = waiting[name]
+	if procs and #procs > 0 then
+		for i=1,#procs,1 do
+			local proc = predec.getProc(procs[i])
+			proc.state = predec.state.SUSPEND
+			instance.resume(proc.pid)
+			proc.args = event
+		end
+	end
+
+	return event
+end
+
 local function requeueEvents(single)
 	-- Grab the next event and exit
 	if single then
-		table.insert(eventQueue, { os.pullEventRaw() })
+		processEvent()
 		return 1
 	end
 
@@ -195,8 +219,7 @@ local function requeueEvents(single)
 	os.queueEvent("_kernel", "sched_event")
 	local nEvent = -1
 	repeat
-		local event = { os.pullEventRaw() }
-		table.insert(eventQueue, event)
+		local event = processEvent()
 
 		nEvent = nEvent + 1
 	until event[1] == "_kernel" and event[2] == "sched_event"
@@ -424,11 +447,13 @@ local ProcState = {
 	INVALID = -1,
 	INIT = 0,
 	RUN = 1,
-	SUSPEND = 2,
-	STOP = 3,
-	FINISH = 4,
-	ERROR = 5
+	WAIT = 2,
+	SUSPEND = 3,
+	STOP = 4,
+	FINISH = 5,
+	ERROR = 6
 }
+predec.state = ProcState
 
 -- [Helper]
 -- Converts ProcState enum to string
@@ -459,11 +484,29 @@ function Process:run()
 		return false
 	end
 
+	self.code = {}
 	if self.state == ProcState.INIT then
 		self.state = ProcState.RUN
-		coroutine.resume(self.proc, table.unpack(self.args))
-	elseif self.state == ProcState.RUN then
-		coroutine.resume(self.proc)
+	end
+
+
+	if self.state == ProcState.RUN then
+		self.code = { coroutine.resume(self.proc, table.unpack(self.args)) }
+		table.remove(self.code, 1)
+
+		self.args = {}
+	end
+
+	if #self.code > 0 then
+		instance.suspend(self.pid)
+		self.state = ProcState.WAIT
+
+		local name = self.code[1]
+		if waiting[name] == nil then
+			waiting[name] = {}
+		end
+
+		table.insert(waiting[name], self.pid)
 	end
 
 	return coroutine.status(self.proc) ~= "dead"
@@ -549,6 +592,7 @@ local function getProcById(pid)
 
 	return nil, "No process found"
 end
+predec.getProc = getProcById
 
 -- [Helper]
 -- Checks that the pid belongs to a valid process
@@ -880,9 +924,10 @@ end
 -- [Utility]
 -- Runs a function atomically (without yielding to CC)
 local function atomic(func, ...)
+	local args = {...}
 	local status = {}
 	local c = coroutine.create(function()
-		local g, msg = pcall(func, ...)
+		local g, msg = pcall(func, table.unpack(args))
 
 		status.g = g
 		status.msg = msg
