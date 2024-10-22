@@ -158,7 +158,8 @@ function MLTable:get_all_set(...)
 
         if level._ANY then
             build_set(level._ANY, i+1)
-        elseif vargs[i] ~= nil and level[vargs[i]] then
+		end
+        if vargs[i] ~= nil and level[vargs[i]] then
             build_set(level[vargs[i]], i+1)
         end
     end

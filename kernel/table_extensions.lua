@@ -61,30 +61,39 @@ function table.getkey(t, value)
 	return nil
 end
 
-function table.ser(t, items)
+function table.ser(t) --, items)
 	kvpairs = {}
-	items = items or {_idx=0}
+	--items = items or {_idx=0}
 
-	-- Keep cache of previously seen items
-	local iCpy = items[t]
-	if iCpy ~= nil then
-		return "{["..iCpy.."]=''}"
-	else
-		items[t] = items._idx
-		items._idx = items._idx + 1
-	end
+	-- TODO: Keep cache of previously seen items
+	-- WARN: Until TODO, cannot support recursive
+	--local iCpy = items[t]
+	--if iCpy ~= nil then
+	--	return "{["..iCpy.."]=''}"
+	--else
+	--	items[t] = items._idx
+	--	items._idx = items._idx + 1
+	--end
 
 	for k,v in pairs(t) do
 		if type(k) == "table" then
 			k = table.ser(k)
 		elseif type(k) == "boolean" then
 			k = k and "true" or "false"
+		elseif type(k) == "thread" then
+			k = "<thread>"
+		elseif type(k) == "string" then
+			k = '"'..k..'"'
 		end
 
 		if type(v) == "table" then
 			v = table.ser(v)
 		elseif type(v) == "boolean" then
 			v = v and "true" or "false"
+		elseif type(v) == "thread" then
+			v = "<thread>"
+		elseif type(v) == "string" then
+			v = '"'..v..'"'
 		end
 
 		table.insert(kvpairs, k.."="..v)
@@ -100,6 +109,8 @@ function table.concat2(t, sep)
 	for _,v in ipairs(t) do
 		if type(v) == "table" then
 			v = table.ser(v)
+		elseif type(v) == "boolean" then
+			v = v and "true" or "false"
 		end
 
 		table.insert(fixed, v)

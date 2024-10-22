@@ -17,6 +17,16 @@ local function ps()
 	end
 end
 
+local function tasks()
+	local tasks = kernel.task_list()
+	print("#"..#tasks.." tasks")
+
+	print("    TID  TIMER TIME EVERY")
+	for i,v in ipairs(tasks) do
+		print(string.format("[%d] %-4d %-5d %-4d", i, v.tid, v.timer, v.time), v.every)
+	end
+end
+
 local function top()
 	local iter = 0
 	while true do
@@ -32,6 +42,10 @@ local function top()
 
 		term.setCursorPos(1, 1)
 		ps()
+
+		print()
+
+		tasks()
 
 		term.redirect(prev)
 		iter = iter + 1

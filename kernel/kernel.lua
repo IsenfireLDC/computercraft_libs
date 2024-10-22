@@ -104,6 +104,12 @@
 --
 -- -------------------- PROGRAM START --------------------
 
+-- TODO: DEBUG: Remove
+local _d_log = io.open("kernel.log", "w")
+
+-- CC Modules
+local expect = require("cc.expect")
+
 -- Modules
 require("apis/mltable")
 -- TODO: Move extensions to different directory: require("extensions/table")
@@ -127,6 +133,9 @@ local running = false
 -- Handler should expect a list of arguments as a table
 -- All registered handlers will be called
 local function add_handler(handler, max_level, ...)
+	expect(1, handler, "function")
+	expect(2, max_level, "number", "nil")
+
 	max_level = max_level or 0
 
 	event_handlers:add(handler, max_level, ...)
@@ -164,12 +173,16 @@ end
 -- [Helper]
 -- Handles dispatching events
 local function dispatch_event(event)
+	--print("E>", table.unpack(event))
 	local handlers = event_handlers:get_all_set(table.unpack(event))
+	--print("E> "..table.len(handlers).." handlers")
 
 	-- Only call event handlers at or below their max depth
 	for handler,lev in pairs(handlers) do
 		if lev == 0 or #event <= lev then
 			handler(event)
+		else
+			print("K> E> Handler disqualified due to max_level")
 		end
 	end
 
@@ -182,26 +195,55 @@ local function dispatch_event(event)
 	end
 end
 
-
 -- Predeclaration
 local predec = {}
 
 local waiting = {}
+local waitingEventQueue = {}
 local eventQueue = {}
 local function processEvent()
 	local event = { os.pullEventRaw() }
 	table.insert(eventQueue, event)
 
 	-- TODO: Improve
-	-- Send events to any tasks waiting for one
+	-- Queue events sent to any processes waiting for one
 	local name = event[1]
 	local procs = waiting[name]
 	if procs and #procs > 0 then
 		for i=1,#procs,1 do
-			local proc = predec.getProc(procs[i])
+			local pid = procs[i]
+
+			-- Queue wait
+			if waitingEventQueue[pid] == nil then
+				waitingEventQueue[pid] = {}
+			end
+			table.insert(waitingEventQueue[pid], event)
+			print("K> Queued event "..name.." for PID "..pid)
+		end
+	end
+
+	-- Try to wake any waiting processes every event
+	for pid, events in pairs(waitingEventQueue) do
+		local proc = predec.getProc(pid)
+
+		-- If in suspend, assume that it got the event it wanted
+		-- Kind of sketchy, but idk what to do here
+		if proc.state == predec.state.SUSPEND then
+			waitingEventQueue[pid] = nil
+			for name, procs in pairs(waiting) do
+				local idx = table.find(procs, pid)
+				if idx ~= nil then
+					--print("K> PID "..pid.." stopped waiting for "..name)
+					table.remove(procs, pid)
+				else
+					print("K> PID "..pid.." not waiting for "..name)
+				end
+			end
+		elseif proc.state == predec.state.WAIT then
+			_d_log:write(pid.." > S\n")
 			proc.state = predec.state.SUSPEND
-			instance.resume(proc.pid)
-			proc.args = event
+			proc.args = table.remove(waitingEventQueue[pid], 1)
+			instance.resume(pid)
 		end
 	end
 
@@ -261,11 +303,13 @@ end
 -- [Handler]
 -- Handles calling a scheduled task on a timer event
 local function h_task(event)
+	--print("K> T> Handling timer...")
 	if not event[2] then return end
 
 	local task = tasks[event[2]]
 	if not task or not task.task then return end
 
+	--print("K> T> Running task "..task.tid)
 	task.task()
 
 	if task.every ~= nil then
@@ -408,6 +452,21 @@ local function cancel(task_id)
 end
 
 
+local function task_list()
+	local tasklist = {}
+	for timerID, info in pairs(tasks) do
+		table.insert(tasklist, {
+			tid = info.tid,
+			time = info.time,
+			timer = timerID,
+			every = info.every
+		})
+	end
+
+	return tasklist
+end
+
+
 -- [Utility]
 -- Sets a one-time temporary handler for a specific event
 local function add_temp_handler(handler, timeout, ...)
@@ -486,20 +545,24 @@ function Process:run()
 
 	self.code = {}
 	if self.state == ProcState.INIT then
+		_d_log:write(self.pid.." > R\n")
 		self.state = ProcState.RUN
 	end
 
 
+	local status = false
 	if self.state == ProcState.RUN then
 		self.code = { coroutine.resume(self.proc, table.unpack(self.args)) }
-		table.remove(self.code, 1)
+		status = table.remove(self.code, 1)
 
 		self.args = {}
 	end
 
-	if #self.code > 0 then
+	if status and #self.code > 0 then
 		instance.suspend(self.pid)
+		_d_log:write(self.pid.." > W\n")
 		self.state = ProcState.WAIT
+		--print("K> S> Wait "..self.pid.." with args "..table.concat2(self.code, "; "))
 
 		local name = self.code[1]
 		if waiting[name] == nil then
@@ -551,9 +614,15 @@ local function start(process, ...)
 	-- Create coroutine for the process
 	proc.proc = coroutine.create(function(...)
 		local g, msg = pcall(process, ...)
+
+		--print("K> P["..proc.pid.."]>", msg)
+		--error("K> Process 0 exited "..(g and "success" or "failure"))
+
 		if g then
+			_d_log:write(proc.pid.." > F\n")
 			proc.state = ProcState.FINISH
 		else
+			_d_log:write(proc.pid.." > E\n")
 			proc.state = ProcState.ERROR
 		end
 
@@ -577,6 +646,10 @@ local function getProcById(pid)
 
 	for priority, plist in pairs(processes) do
 		for _, proc in ipairs(plist) do
+			if proc.state ~= ProcState.INIT and proc.state ~= ProcState.RUN and proc.state ~= ProcState.RUN then -- TODO: Remove
+				error("Have process "..proc.pid.." in normal list but state is "..stateToStr(proc.state))
+			end
+
 			if proc.pid == pid then
 				return proc, priority
 			end
@@ -584,6 +657,10 @@ local function getProcById(pid)
 
 		-- Also check suspended processes
 		for _, proc in ipairs(plist._suspended) do
+			if proc.state ~= ProcState.SUSPEND and proc.state ~= ProcState.WAIT then -- TODO: Remove
+				error("Have process "..proc.pid.." in suspend list but state is "..stateToStr(proc.state))
+			end
+
 			if proc.pid == pid then
 				return proc, priority
 			end
@@ -609,13 +686,20 @@ end
 -- [Helper]
 -- Moves process to the appropriate process list
 local function changeState(proc, nice, state)
+	local stateStr = stateToStr(state):sub(1, 1)
+	if state == ProcState.INVALID then stateStr = "X" end
+	_d_log:write(proc.pid.." > "..stateStr.."\n")
+
 	-- Suspended processes are in a sub-list
-	if proc.state == ProcState.SUSPEND then
+	-- TODO: Should 'WAIT' be handled here?
+	if proc.state == ProcState.SUSPEND or proc.state == ProcState.WAIT then
 		if state == ProcState.SUSPEND then return end
 
+		--print("K> ["..proc.pid.."] >R")
 		table.insert(processes[nice], proc)
 		table.remove(processes[nice]._suspended, table.find(processes[nice]._suspended, proc))
 	elseif state == ProcState.SUSPEND then
+		--print("K> ["..proc.pid.."] >S")
 		table.insert(processes[nice]._suspended, proc)
 		table.remove(processes[nice], table.find(processes[nice], proc))
 	end
@@ -674,12 +758,12 @@ local function priority(pid, nice)
 	local proc, msg = checkPID(pid)
 	if proc == nil then return false, msg end
 
-	-- Temporarily move to run state to ensure the process is in the normal list
+	-- Temporarily move to invalid state to ensure the process is in the normal list
 	local state = proc.state
-	changeState(proc, msg, ProcState.RUN)
+	changeState(proc, msg, ProcState.INVALID)
 	table.insert(processes[nice], proc)
 	table.remove(processes[msg], table.find(processes[msg], proc))
-	changeState(proc, msg, state)
+	changeState(proc, nice, state)
 
 	return true
 end
@@ -843,18 +927,19 @@ local function sched_next()
 	sched_event(false)
 
 	_iterations = _iterations + 1
+	--print("K> Iter: ".._iterations)
 
 	-- Walk up each level until we find a process to run
 	while procList ~= nil and not is_suspended[level] and procList._last_run >= #procList do
 		-- Remove empty levels
-		if #procList == 0 then
-			-- If all processes are suspended, level wil appear empty, but should not be deleted
+		if #procList == 0 and #procList._suspended == 0 then
+			table.remove(priorities, level)
+		else
+			-- If all processes are suspended, level may appear empty, but should not be deleted
 			if #procList._suspended > 0 then
 				is_suspended[level] = true
-			else
-				table.remove(priorities, level)
 			end
-		else
+
 			level = level + 1
 
 			-- Reset _last_run to 0 so we know to run the first task next time
@@ -889,6 +974,7 @@ local function sched_next()
 		sched_yield(true)
 	end
 
+	--print("K> Run "..proc.pid)
 	if not proc:run() then
 		-- Remove stopped or finished processes
 		table.remove(procList, toRun)
@@ -905,7 +991,7 @@ local function sched_next()
 		elseif proc.state == ProcState.ERROR then
 			proc_status = "errored"
 		end
-		os.queueEvent("kernel", "process_complete", proc.pid, proc_status)
+		os.queueEvent("kernel", "process_complete", proc.pid, proc_status, proc.msg)
 	end
 	procList._last_run = toRun
 
@@ -952,8 +1038,10 @@ local function p_kernel(state, require_stop, norep)
 		-- os.pullEventRaw yields
 		local event = nextEvent()
 
-		dispatch_event(event)
-		dispatch_event_task(event)
+		local p_ret = { pcall(dispatch_event, event) }
+		local p_status = table.remove(p_ret, 1)
+		if not p_status then print("K> dispatch_event failed:", table.unpack(p_ret)) end
+		if not pcall(dispatch_event_task, event) then print("K> dispatch_event_task failed") end
 
 		-- Send a terminate event before exiting
 		if event[1] == "stop_kernel" then
@@ -991,6 +1079,8 @@ end
 
 -- Performs system-wide initialization
 local function init()
+	print("K> Initializing kernel")
+
 	-- Seed RNG
 	math.randomseed(os.computerID() * os.clock() + os.computerID())
 end
@@ -1051,6 +1141,7 @@ instance = {
 	schedule = schedule,
 	schedule_on_event = schedule_on_event,
 	cancel = cancel,
+	task_list = task_list,
 
 	-- Processes utility
 	start = start,
