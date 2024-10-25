@@ -36,8 +36,8 @@ end
 -- Schedules (or reschedules) a task to run
 -- The `tid` parameter is only for automatic rescheduling, and shouldn't be used otherwise
 -- Set every to nil to disable repetition
-local function schedule(task, time, every, tid)
-	if not task or time == nil then return nil end
+local function schedule(func, time, every, tid)
+	if not func or time == nil then return nil end
 	tid = tid or getTID()
 
 	local timer = os.startTimer(time)
