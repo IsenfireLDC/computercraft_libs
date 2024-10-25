@@ -16,7 +16,7 @@
 --
 -- To use events with the kernel, register a handler using `kernel.add_handler`.  To run a function once, use
 -- `kernel.add_temp_handler` or `kernel.schedule_on_event`.  Any code outside of a process must be event-driven.  In a
--- process, use the process utility `kernel.event_sleep` to wait for an event.
+-- process, use the process utility `kernel.eventSleep` to wait for an event.
 --
 --
 --
@@ -120,388 +120,14 @@ require("apis/table_extensions")
 -- Globals
 -- Table to be filled with functions
 local instance = {}
-
-local event_handlers = MLTable:new()
-local event_interfaces = MLTable:new()
+local private = {}
 
 -- Status flag
 local running = false
 
-
--- Adds a handler for any event types
--- Pass the event parameters for the event that this will handle
--- Handler should expect a list of arguments as a table
--- All registered handlers will be called
-local function add_handler(handler, max_level, ...)
-	expect(1, handler, "function")
-	expect(2, max_level, "number", "nil")
-
-	max_level = max_level or 0
-
-	event_handlers:add(handler, max_level, ...)
-end
-
--- Removes the given handler from the given event
--- Pass the event parameters for the event that this was added with
-local function remove_handler(handler, ...)
-	event_handlers:remove(handler, ...)
-end
-
--- Register an interface class for event handling
--- Will dispatch handled events to the requested method
---
--- Arg method must be a string containing the method name
--- NOTE: Only one method per class per event
-local function add_interface(class, method, ...)
-	if not class or not method then
-		return false, "Missing class or method"
-	end
-
-	event_interfaces:add(class, method, ...)
-
-	return true
-end
-
--- Remove an interface class method
-local function remove_interface(class, method, ...)
-	if not class or not method then return end
-
-	event_interfaces:remove(class, method, ...)
-end
-
-
--- [Helper]
--- Handles dispatching events
-local function dispatch_event(event)
-	--print("E>", table.unpack(event))
-	local handlers = event_handlers:get_all_set(table.unpack(event))
-	--print("E> "..table.len(handlers).." handlers")
-
-	-- Only call event handlers at or below their max depth
-	for handler,lev in pairs(handlers) do
-		if lev == 0 or #event <= lev then
-			handler(event)
-		else
-			print("K> E> Handler disqualified due to max_level")
-		end
-	end
-
-
-	-- Also dispatch events to interfaces
-	local interfaces = event_interfaces:get_all_set(table.unpack(event))
-
-	for instance,method in pairs(interfaces) do
-		method(instance, event)
-	end
-end
-
--- Predeclaration
-local predec = {}
-
-local waiting = {}
-local waitingEventQueue = {}
-local eventQueue = {}
-local function processEvent()
-	local event = { os.pullEventRaw() }
-	table.insert(eventQueue, event)
-
-	-- TODO: Improve
-	-- Queue events sent to any processes waiting for one
-	local name = event[1]
-	local procs = waiting[name]
-	if procs and #procs > 0 then
-		for i=1,#procs,1 do
-			local pid = procs[i]
-
-			-- Queue wait
-			if waitingEventQueue[pid] == nil then
-				waitingEventQueue[pid] = {}
-			end
-			table.insert(waitingEventQueue[pid], event)
-			print("K> Queued event "..name.." for PID "..pid)
-		end
-	end
-
-	-- Try to wake any waiting processes every event
-	for pid, events in pairs(waitingEventQueue) do
-		local proc = predec.getProc(pid)
-
-		-- If in suspend, assume that it got the event it wanted
-		-- Kind of sketchy, but idk what to do here
-		if proc.state == predec.state.SUSPEND then
-			waitingEventQueue[pid] = nil
-			for name, procs in pairs(waiting) do
-				local idx = table.find(procs, pid)
-				if idx ~= nil then
-					--print("K> PID "..pid.." stopped waiting for "..name)
-					table.remove(procs, pid)
-				else
-					print("K> PID "..pid.." not waiting for "..name)
-				end
-			end
-		elseif proc.state == predec.state.WAIT then
-			_d_log:write(pid.." > S\n")
-			proc.state = predec.state.SUSPEND
-			proc.args = table.remove(waitingEventQueue[pid], 1)
-			instance.resume(pid)
-		end
-	end
-
-	return event
-end
-
-local function requeueEvents(single)
-	-- Grab the next event and exit
-	if single then
-		processEvent()
-		return 1
-	end
-
-	-- Add sentinal to the end of the queue and grab all events
-	os.queueEvent("_kernel", "sched_event")
-	local nEvent = -1
-	repeat
-		local event = processEvent()
-
-		nEvent = nEvent + 1
-	until event[1] == "_kernel" and event[2] == "sched_event"
-
-	return nEvent
-end
-
-local function nextEvent()
-	while #eventQueue == 0 do
-		instance.suspend(0)
-		coroutine.yield()
-	end
-
-	return table.remove(eventQueue, 1)
-end
-
-
--- -------------------- TASKS UTILITY --------------------
--- Scheduled tasks list
--- [timer_id] {Task}
-local tasks = {}
-local rtasks = {}
-
--- Event tasks & temp handlers
-local waiting_on_event = MLTable:new()
-local temp_handlers = MLTable:new()
-local waiting_timeouts = {}
-
-local last_tid = 0
-
--- [Helper]
--- Gets the next available task id
-local function next_tid()
-	last_tid = last_tid + 1
-
-	return last_tid
-end
-
--- [Handler]
--- Handles calling a scheduled task on a timer event
-local function h_task(event)
-	--print("K> T> Handling timer...")
-	if not event[2] then return end
-
-	local task = tasks[event[2]]
-	if not task or not task.task then return end
-
-	--print("K> T> Running task "..task.tid)
-	task.task()
-
-	if task.every ~= nil then
-		instance.schedule(task.task, task.every, task.every, task.tid)
-	else
-		rtasks[task.tid] = nil
-	end
-
-	tasks[event[2]] = nil
-end
-
--- [Utility]
--- Schedules a function as a task
-local function schedule(task, time, every, tid)
-	if not task or time == nil then return nil end
-	tid = tid or next_tid()
-
-	local timer = os.startTimer(time)
-	tasks[timer] = {
-		tid = tid,
-		task = task,
-		time = time,
-		every = every
-	}
-
-	rtasks[tid] = timer
-
-	return tid
-end
-
-
--- [Helper]
--- Handles dispatching tasks waiting on events
-local function dispatch_event_task(event)
-	-- TEMP HANDLERS
-	-- Call any temporary handlers
-	local handlers = temp_handlers:get_all_set(table.unpack(event))
-
-	-- Run and cancel timeouts for handlers
-	for handler,tid in pairs(handlers) do
-		handler(event)
-
-		if tid > 0 then
-			os.cancelTimer(tid)
-			waiting_timeouts[tid] = nil
-		end
-	end
-
-	-- Remove called handlers
-	temp_handlers:remove_all(table.unpack(event))
-
-
-	-- TASKS
-	-- Call any waiting tasks
-	local waiting = waiting_on_event:get_all_set(table.unpack(event))
-
-	-- Cancel timeouts for any called tasks
-	for task,tid in pairs(waiting) do
-		task(true)
-
-		if tid > 0 then
-			os.cancelTimer(tid)
-			waiting_timeouts[tid] = nil
-		end
-	end
-
-	-- Delete all tasks that were called
-	waiting_on_event:remove_all(table.unpack(event))
-end
-
--- [Handler]
--- Handles timer events and removes events if they time out
-local function h_task_timeout(event)
-	local task_info = waiting_timeouts[event[2]]
-	
-	-- Cancel the task if it is waiting
-	if task_info then
-		-- TODO: Is this correct behavior?
-		task_info.handler(false)
-
-		waiting_on_event:remove(task_info.handler, table.unpack(task_info.path))
-		rtasks[task_info.tid] = nil
-	end
-
-	waiting_timeouts[event[2]] = nil
-end
-
--- [Utility]
--- Calls a function on an event once
--- Will wait forever if timout is 0 or nil
-local function schedule_on_event(task, timeout, ...)
-	if not task then return end
-	local tid = next_tid()
-
-	local vargs = { ... }
-
-	-- Setup timeout, if requested
-	local timer = -1
-	if timeout then
-		timer = os.startTimer(timeout)
-
-		waiting_timeouts[timer] = {
-			tid = tid,
-			handler = task,
-			path = vargs
-		}
-	end
-
-	-- Note: Had vargs here for aiding in deletion, re-add if necessary
-	waiting_on_event:add(task, timer, ...)
-
-	rtasks[tid] = {task=task, timer=timer, path=vargs}
-
-	return tid
-end
-
--- [Utility]
--- Cancels a scheduled task
-local function cancel(task_id)
-	if not task_id then return end
-
-	local meta = rtasks[task_id]
-	if not meta then return end
-
-	-- Event task
-	if type(meta) == "table" then
-		if meta.timer then
-			os.cancelTimer(meta.timer)
-			waiting_timeouts[meta.timer] = nil
-		end
-
-		waiting_on_event:remove(meta.task, table.unpack(meta.path))
-	
-	-- Normal task
-	else
-		os.cancelTimer(meta)
-		tasks[meta] = nil
-		rtasks[task_id] = nil
-	end
-end
-
-
-local function task_list()
-	local tasklist = {}
-	for timerID, info in pairs(tasks) do
-		table.insert(tasklist, {
-			tid = info.tid,
-			time = info.time,
-			timer = timerID,
-			every = info.every
-		})
-	end
-
-	return tasklist
-end
-
-
--- [Utility]
--- Sets a one-time temporary handler for a specific event
-local function add_temp_handler(handler, timeout, ...)
-	if not handler then return end
-
-	local vargs = { ... }
-
-	-- Setup timeout, if requested
-	local tid = -1
-	if timeout then
-		tid = os.startTimer(timeout)
-
-		waiting_timeouts[tid] = {
-			handler = handler,
-			path = vargs
-		}
-	end
-
-	-- Note: Had vargs here for aiding in deletion, re-add if necessary
-	temp_handlers:add(handler, tid, ...)
-end
-
--- -------------------- END TASKS UTILITY --------------------
-
-
-
--- -------------------- PROCESSES UTILITY --------------------
--- [nice] { _last_run, _suspended[{Process}], [{Process}] }
-local processes = { [0] = { _last_run = 0, _suspended = {} }}
-local proc_id = 1 -- 0 reserved for kernel
-local nice = 0 -- Initial priority for new processes
-local priorities = {0}
-
 local BAD_PID = -1
 
+-- [Enum]
 local ProcState = {
 	INVALID = -1,
 	INIT = 0,
@@ -512,7 +138,6 @@ local ProcState = {
 	FINISH = 5,
 	ERROR = 6
 }
-predec.state = ProcState
 
 -- [Helper]
 -- Converts ProcState enum to string
@@ -521,11 +146,30 @@ local function stateToStr(state)
 end
 
 
+-- [nice] { _last_run, _suspended[{Process}], [{Process}] }
+local processes = { [0] = { _last_run = 0, _suspended = {} }}
+local g_pid = 1 -- 0 reserved for kernel
+local nice = 0 -- Initial priority for new processes
+local priorities = {0}
+
+
+-- Currently running process
+-- Set by scheduler and used in process utilities
+local current_process = Process
+local current_priority = 0
+
+local eventSentinel = { "_kernel", "event_sentinel" }
+
+
+-- [Class]
+-- Represents a process in the kernel
 local Process = {
 	pid = BAD_PID,
 	proc = nil,
 	args = {},
-	state = ProcState.INVALID
+	state = ProcState.INVALID,
+	events = {},
+	eventFilter = {}
 }
 function Process:new(obj)
 	obj = obj or {}
@@ -543,68 +187,188 @@ function Process:run()
 		return false
 	end
 
-	self.code = {}
 	if self.state == ProcState.INIT then
 		_d_log:write(self.pid.." > R\n")
 		self.state = ProcState.RUN
+		table.insert(self.events, 1, self.args)
 	end
 
-
-	local status = false
 	if self.state == ProcState.RUN then
-		self.code = { coroutine.resume(self.proc, table.unpack(self.args)) }
-		status = table.remove(self.code, 1)
-
-		self.args = {}
-	end
-
-	if status and #self.code > 0 then
-		instance.suspend(self.pid)
-		_d_log:write(self.pid.." > W\n")
-		self.state = ProcState.WAIT
-		--print("K> S> Wait "..self.pid.." with args "..table.concat2(self.code, "; "))
-
-		local name = self.code[1]
-		if waiting[name] == nil then
-			waiting[name] = {}
-		end
-
-		table.insert(waiting[name], self.pid)
+		local next = table.remove(self.events, 1)
+		coroutine.resume(self.proc, (next ~= nil and table.unpack(next) or nil))
 	end
 
 	return coroutine.status(self.proc) ~= "dead"
 end
 
 
--- Currently running process
--- Set by scheduler and used in process utilities
-local current_process = Process
+-- [Helper]
+--
+function private.matchFilter(filter, event)
+	for i, p in ipairs(filter) do
+		if p ~= event[i] then
+			return false
+		end
+	end
+
+	return true
+end
+
+-- [Helper]
+--
+function private.queueProcEvent(proc, nice, event)
+	if private.matchFilter(proc.eventFilter, event) then
+		table.insert(proc.events, event)
+
+		if proc.state == ProcState.WAIT then
+			_d_log:write(proc.pid.." > S\n")
+			proc.state = ProcState.SUSPEND
+			private.changeState(proc, nice, ProcState.RUN)
+		end
+	end
+end
+
+-- [Helper]
+-- Pull the next event and add it to the queue of all processes
+function private.processEvent()
+	local event = { coroutine.yield() }
+
+	if private.matchFilter(eventSentinel, event) then
+		return false
+	end
+
+	_d_log:write("E> ", table.unpack(event), "\n")
+	for nice, procList in pairs(processes) do
+		for _, proc in ipairs(procList) do
+			private.queueProcEvent(proc, nice, event)
+		end
+
+		for _, proc in ipairs(procList._suspended) do
+			private.queueProcEvent(proc, nice, event)
+		end
+	end
+
+	return true
+end
+
+-- [Helper]
+-- Pull and requeue the next, or all available events
+function private.requeueEvents(single)
+	-- Grab the next event and exit
+	if single then
+		private.processEvent()
+		return 1
+	end
+
+	-- Add sentinal to the end of the queue and grab all events
+	os.queueEvent(table.unpack(eventSentinel))
+	local nEvent = 0
+	while private.processEvent() do
+		nEvent = nEvent + 1
+	end
+
+	return nEvent
+end
+
+function private.pullEvent(...)
+	current_process.eventFilter = { ... }
+	if #current_process.events == 0 then
+		private.changeState(current_process, current_priority, ProcState.SUSPEND)
+		_d_log:write(current_process.pid.." > W\n")
+		current_process.state = ProcState.WAIT
+	end
+
+	return { coroutine.yield() }
+end
+
+
+
+
 
 -- [Helper]
 -- Generates next pid
 local pidOverride = BAD_PID
-local function nextPID()
-	local pid = proc_id
+function private.nextPID()
+	local pid = g_pid
 
 	if pidOverride >= 0 then
 		pid = pidOverride
 		pidOverride = BAD_PID
 	else
-		proc_id = proc_id + 1
+		g_pid = g_pid + 1
 	end
 
 	return pid
 end
 
 
+-- [Helper]
+-- Gets the process associated with the given PID
+function private.getProcById(pid)
+	if pid == nil or pid < 0 then return nil, "Invalid PID" end
 
--- [Utility]
+	for priority, plist in pairs(processes) do
+		for _, proc in ipairs(plist) do
+			if proc.pid == pid then
+				return proc, priority
+			end
+		end
+
+		-- Also check suspended processes
+		for _, proc in ipairs(plist._suspended) do
+			if proc.pid == pid then
+				return proc, priority
+			end
+		end
+	end
+
+	return nil, "No process found"
+end
+
+-- [Helper]
+-- Checks that the pid belongs to a valid process
+function private.checkPID(pid, nostop)
+	if nostop == nil then nostop = true end
+
+	local proc, priority = private.getProcById(pid)
+	if proc == nil then return nil, "Invalid process" end
+	if nostop and proc.state == ProcState.STOP then return nil, "Process stopped" end
+
+	return proc, priority
+end
+
+-- [Helper]
+-- Moves process to the appropriate process list
+function private.changeState(proc, nice, state)
+	local stateStr = stateToStr(state):sub(1, 1)
+	if state == ProcState.INVALID then stateStr = "X" end
+	_d_log:write(proc.pid.." > "..stateStr.."\n")
+
+	-- Suspended processes are in a sub-list
+	if proc.state == ProcState.WAIT or state == ProcState.WAIT then
+		error("Transition to/from wait") -- TODO: Remove
+	end
+	if proc.state == ProcState.SUSPEND then
+		if state == ProcState.SUSPEND then return end
+
+		table.insert(processes[nice], proc)
+		table.remove(processes[nice]._suspended, table.find(processes[nice]._suspended, proc))
+	elseif state == ProcState.SUSPEND then
+		table.insert(processes[nice]._suspended, proc)
+		table.remove(processes[nice], table.find(processes[nice], proc))
+	end
+
+	proc.state = state
+end
+
+
+
 -- Starts a coroutine on the given function
 local function start(process, ...)
 	if not process then return nil, "Process cannot be nil" end
 
 	-- Create process entry
-	local pid = nextPID()
+	local pid = private.nextPID()
 	local proc = Process:new{
 		pid = pid,
 		args = { ... },
@@ -614,9 +378,6 @@ local function start(process, ...)
 	-- Create coroutine for the process
 	proc.proc = coroutine.create(function(...)
 		local g, msg = pcall(process, ...)
-
-		--print("K> P["..proc.pid.."]>", msg)
-		--error("K> Process 0 exited "..(g and "success" or "failure"))
 
 		if g then
 			_d_log:write(proc.pid.." > F\n")
@@ -636,113 +397,38 @@ local function start(process, ...)
 	return pid
 end
 
-
-
-
--- [Helper]
--- Gets the process associated with the given PID
-local function getProcById(pid)
-	if pid == nil or pid < 0 then return nil, "Invalid PID" end
-
-	for priority, plist in pairs(processes) do
-		for _, proc in ipairs(plist) do
-			if proc.state ~= ProcState.INIT and proc.state ~= ProcState.RUN and proc.state ~= ProcState.RUN then -- TODO: Remove
-				error("Have process "..proc.pid.." in normal list but state is "..stateToStr(proc.state))
-			end
-
-			if proc.pid == pid then
-				return proc, priority
-			end
-		end
-
-		-- Also check suspended processes
-		for _, proc in ipairs(plist._suspended) do
-			if proc.state ~= ProcState.SUSPEND and proc.state ~= ProcState.WAIT then -- TODO: Remove
-				error("Have process "..proc.pid.." in suspend list but state is "..stateToStr(proc.state))
-			end
-
-			if proc.pid == pid then
-				return proc, priority
-			end
-		end
-	end
-
-	return nil, "No process found"
-end
-predec.getProc = getProcById
-
--- [Helper]
--- Checks that the pid belongs to a valid process
-local function checkPID(pid, nostop)
-	if nostop == nil then nostop = true end
-
-	local proc, priority = getProcById(pid)
-	if proc == nil then return nil, "Invalid process" end
-	if nostop and proc.state == ProcState.STOP then return nil, "Process stopped" end
-
-	return proc, priority
-end
-
--- [Helper]
--- Moves process to the appropriate process list
-local function changeState(proc, nice, state)
-	local stateStr = stateToStr(state):sub(1, 1)
-	if state == ProcState.INVALID then stateStr = "X" end
-	_d_log:write(proc.pid.." > "..stateStr.."\n")
-
-	-- Suspended processes are in a sub-list
-	-- TODO: Should 'WAIT' be handled here?
-	if proc.state == ProcState.SUSPEND or proc.state == ProcState.WAIT then
-		if state == ProcState.SUSPEND then return end
-
-		--print("K> ["..proc.pid.."] >R")
-		table.insert(processes[nice], proc)
-		table.remove(processes[nice]._suspended, table.find(processes[nice]._suspended, proc))
-	elseif state == ProcState.SUSPEND then
-		--print("K> ["..proc.pid.."] >S")
-		table.insert(processes[nice]._suspended, proc)
-		table.remove(processes[nice], table.find(processes[nice], proc))
-	end
-
-	proc.state = state
-end
-
-
-
--- [Utility]
 -- Resumes a suspended process
 local function resume(pid)
-	local proc, msg = checkPID(pid)
+	local proc, msg = private.checkPID(pid)
 	if proc == nil then return false, msg end
 
-	changeState(proc, msg, ProcState.RUN)
+	private.changeState(proc, msg, ProcState.RUN)
 
 	return true
 end
 
--- [Utility]
 -- Suspends a process
 local function suspend(pid)
-	local proc, msg = checkPID(pid)
+	local proc, msg = private.checkPID(pid)
 	if proc == nil then return false, msg end
 
-	changeState(proc, msg, ProcState.SUSPEND)
+	private.changeState(proc, msg, ProcState.SUSPEND)
 
 	return true
 end
 
--- [Utility]
 -- Stops a process
 local function stop(pid)
-	local proc, msg = checkPID(pid, false)
+	local proc, msg = private.checkPID(pid, false)
 	if proc == nil then return false, msg end
 
-	changeState(proc, msg, ProcState.STOP)
+	private.changeState(proc, msg, ProcState.STOP)
 
 	return true
 end
 
--- [Utility]
+
+
 -- Sets process priority; most negative is highest priority
 local function priority(pid, nice)
 	nice = nice or 0
@@ -755,15 +441,15 @@ local function priority(pid, nice)
 		processes[nice] = { _last_run = 0, _suspended = {} }
 	end
 
-	local proc, msg = checkPID(pid)
+	local proc, msg = private.checkPID(pid)
 	if proc == nil then return false, msg end
 
 	-- Temporarily move to invalid state to ensure the process is in the normal list
 	local state = proc.state
-	changeState(proc, msg, ProcState.INVALID)
+	private.changeState(proc, msg, ProcState.INVALID)
 	table.insert(processes[nice], proc)
 	table.remove(processes[msg], table.find(processes[msg], proc))
-	changeState(proc, nice, state)
+	private.changeState(proc, nice, state)
 
 	return true
 end
@@ -771,7 +457,7 @@ end
 
 -- [Utility]
 -- Returns list of all processes with their priorities
-local function process_list()
+local function processList()
 	local procs = {}
 
 	for nice, procList in pairs(processes) do
@@ -799,6 +485,7 @@ local function process_list()
 end
 
 
+
 -- [Process Utility]
 -- Causes the current process to sleep for the given duration
 local function sleep(time)
@@ -807,13 +494,12 @@ local function sleep(time)
 		return false, "Not in a process"
 	end
 
-	instance.suspend(pid)
-
+	-- TODO: What state should this be in?
 	-- Resume this process after the specified time
-	instance.schedule(function() instance.resume(pid) end, time)
+	local tid = os.startTimer(time)
 
 	-- Yield the process
-	coroutine.yield()
+	private.pullEvent("timer", tid)
 
 	return true
 end
@@ -827,13 +513,10 @@ local function wait(pid, timeout)
 		return nil, "Not in a process"
 	end
 
-	instance.suspend(pid)
-
-	-- Resume this process after the specified event or timeout
-	instance.add_temp_handler(function(e) instance.resume(pid, e[4] == "finished") end, timeout, "kernel", "process_complete", pid)
-
 	-- Yield the process, return whether finished successfully
-	return coroutine.yield()
+	local e = private.pullEvent("kernel", "process_complete", pid)
+
+	return e[4] == "finished"
 end
 
 
@@ -846,9 +529,9 @@ local function fork()
 		return nil, "Not in a process"
 	end
 
-	local parent, nice = getProcById(pid)
+	local parent, nice = private.getProcById(pid)
 	local child = Process:new{
-		pid = nextPID(),
+		pid = private.nextPID(),
 		proc = table.deepcopy(parent.proc),
 		args = { 0 },
 		state = ProcState.INIT
@@ -862,21 +545,49 @@ end
 -- [Process Utility]
 -- Suspends process until event occurs or timeout
 -- Timeout of nil/0 will wait forever
-local function event_sleep(timeout, ...)
+local function eventSleep(timeout, ...)
 	local pid = current_process.pid
 	if pid == BAD_PID then
 		return false, "Not in a process"
 	end
 
-	instance.suspend(pid)
+	local tid = -1
+	if timeout ~= nil then
+		tid = os.startTimer(timeout)
+	end
 
-	-- Resume this process after the specified event or timeout
-	instance.schedule_on_event(function() instance.resume(pid) end, timeout, ...)
+	local args = { ... }
 
 	-- Yield the process
-	coroutine.yield()
+	local e = private.pullEvent()
+	if args:len() == 0 then
+		return true
+	end
 
-	return true
+	-- Wait for timeout or event
+	while true do
+		if e[1] == "timer" then
+			if e[2] == tid then
+				return false
+			end
+		elseif e[1] == args[1] then
+			local match = true
+			for i,v in pairs(args) do
+				if e[i] ~= args[i] then
+					match = false
+					break
+				end
+			end
+
+			if match then
+				return true, e:unpack()
+			end
+		end
+
+		e = private.pullEvent()
+	end
+
+	return false
 end
 
 
@@ -890,24 +601,29 @@ local _iterations = 0
 
 -- [Helper]
 -- Requeue events and wake the event handler process if there were any
-local function sched_event(single)
-	if requeueEvents(single) > 0 then
-		local g, msg = instance.resume(0)
-	end
+function private.sched_event(single)
+	private.requeueEvents(single)
+	--if private.requeueEvents(single) > 0 then
+	--	local g, msg = instance.resume(0)
+	--end
 end
+
 -- [Helper]
 -- An event handling a day keeps the "Too long without yielding" away!
 -- Yields from the kernel to CC so we can keep running
 -- Quick mode queues an event so the scheduler is guaranteed to restart immediately
 -- Non-quick mode yields until the next natural event for when all processes are suspended
-local function sched_yield(quick)
+function private.sched_yield(quick)
 	if quick then
 		os.queueEvent("_kernel", "sched_yield")
 	end
 
-	sched_event(true)
+	private.sched_event(true)
 	lastYield = os.clock()
 end
+
+
+
 
 -- Priority scheduler
 -- Runs each item in a level before running an item in a higher (lower priority) level
@@ -918,16 +634,15 @@ end
 -- -1: 12 12 12 12 12 12 12 12 12 12 12 12 12 12 12 12 12 12 12 12 12 12 12 12 
 --
 -- Returns whether there are processes remaining
-local function sched_next()
+function private.sched_next()
 	local level = 1
 	local procList = processes[priorities[level]]
 	local is_suspended = {}
 
 	-- Grab all available events
-	sched_event(false)
+	private.sched_event(false)
 
 	_iterations = _iterations + 1
-	--print("K> Iter: ".._iterations)
 
 	-- Walk up each level until we find a process to run
 	while procList ~= nil and not is_suspended[level] and procList._last_run >= #procList do
@@ -935,7 +650,7 @@ local function sched_next()
 		if #procList == 0 and #procList._suspended == 0 then
 			table.remove(priorities, level)
 		else
-			-- If all processes are suspended, level may appear empty, but should not be deleted
+			-- If processes are suspended, level may appear empty, but should not be deleted
 			if #procList._suspended > 0 then
 				is_suspended[level] = true
 			end
@@ -960,7 +675,7 @@ local function sched_next()
 
 	-- If there are only suspended processes, wait for an event and try again
 	if is_suspended[level] then
-		sched_yield()
+		private.sched_yield()
 		return true
 	end
 
@@ -968,13 +683,13 @@ local function sched_next()
 	local toRun = procList._last_run + 1
 	local proc = procList[toRun]
 	current_process = proc
+	current_priority = priorities[level]
 
 	-- Yield regularly to keep CC happy
 	if os.clock() - lastYield >= yieldPeriod then
-		sched_yield(true)
+		private.sched_yield(true)
 	end
 
-	--print("K> Run "..proc.pid)
 	if not proc:run() then
 		-- Remove stopped or finished processes
 		table.remove(procList, toRun)
@@ -997,11 +712,11 @@ local function sched_next()
 
 	-- Reset to default to indicate that the program is not in a process
 	current_process = Process
+	current_priority = 0
 
 	-- There might be more to do
 	return true
 end
--- -------------------- END PROCESSES UTILITY --------------------
 
 
 
@@ -1010,10 +725,10 @@ end
 -- [Utility]
 -- Runs a function atomically (without yielding to CC)
 local function atomic(func, ...)
-	local args = {...}
+	local vargs = {...}
 	local status = {}
 	local c = coroutine.create(function()
-		local g, msg = pcall(func, table.unpack(args))
+		local g, msg = pcall(func, table.unpack(vargs))
 
 		status.g = g
 		status.msg = msg
@@ -1029,19 +744,33 @@ end
 
 
 
+local function addPlugin(name, plugin)
+	instance.plugins[name] = plugin
+end
+
+local function removePlugin(name)
+	instance.plugins[name] = nil
+end
+
+
+
 
 -- -------------------- KERNEL MAIN --------------------
 -- [Process]
 -- Process 0(priority -10): runs event handlers
-local function p_kernel(state, require_stop, norep)
+function private.p_kernel(state, require_stop, norep)
 	repeat
 		-- os.pullEventRaw yields
-		local event = nextEvent()
+		local event = private.pullEvent()
 
-		local p_ret = { pcall(dispatch_event, event) }
-		local p_status = table.remove(p_ret, 1)
-		if not p_status then print("K> dispatch_event failed:", table.unpack(p_ret)) end
-		if not pcall(dispatch_event_task, event) then print("K> dispatch_event_task failed") end
+		for name, inst in pairs(instance.plugins) do
+			local ret = { pcall(inst.dispatch, event) }
+			local status = table.remove(ret, 1)
+
+			if not status then
+				print("K> "..name.." failed:", ret:unpack())
+			end
+		end
 
 		-- Send a terminate event before exiting
 		if event[1] == "stop_kernel" then
@@ -1059,37 +788,45 @@ local function p_kernel(state, require_stop, norep)
 	until norep or not state.running
 end
 
--- [Utility]
--- If kernel is not running, handles events until the given event happens
-local function run_until_event(timeout, ...)
-	if not running then
-		local function did_run(success) end
-		schedule_on_event(did_run, timeout, ...)
 
-		-- Handle events until task is triggered or times out
-		while waiting_on_event:get(did_run, ...) do
-			local event = {os.pullEventRaw()}
-
-			dispatch_event(event)
-			dispatch_event_task(event)
-		end
+-- [Helper]
+-- Try to load given plugin
+function private.tryLoad(plugin)
+	local f = io.open("plugins/kernel/"..plugin..".lua")
+	if f then
+		f:close()
+		instance.addPlugin(plugin, require("plugins/kernel/"..plugin))
+		print("K> Loaded plugin "..plugin)
+		return true
 	end
+
+	print("K> Failed to load plugin "..plugin)
+	return false
 end
 
-
 -- Performs system-wide initialization
-local function init()
+function private.init()
 	print("K> Initializing kernel")
 
 	-- Seed RNG
 	math.randomseed(os.computerID() * os.clock() + os.computerID())
+
+	-- Load basic plugins
+	private.tryLoad("events")
+	private.tryLoad("tasks")
 end
 
 -- Main program
 -- Handle events with registered handlers
 local function run(require_stop)
-	instance.add_handler(h_task, 0, "timer")
-	instance.add_handler(h_task_timeout, 0, "timer")
+	if _G._KERNEL_PLUGINS then
+		for _, name in ipairs(_G._KERNEL_PLUGINS) do
+			private.tryLoad(name)
+			--if not tryLoad(name) then
+			--	print("K> Failed to load plugin "..name)
+			--end
+		end
+	end
 
 	local state = {
 		running = true,
@@ -1099,18 +836,17 @@ local function run(require_stop)
 	-- Setup scheduler yield tracking
 	lastYield = os.clock()
 
+	-- Start kernel plugin process
 	pidOverride = 0
-	local pid = instance.start(p_kernel, state, require_stop)
+	local pid = instance.start(private.p_kernel, state, require_stop)
 	instance.priority(pid, -10)
-	--instance.suspend(pid)
 
+	-- Run until exit or no processes remaining
 	while state.running do
-		if not sched_next() then
+		if not private.sched_next() then
 			state.exitStatus = "Process pool exhausted"
 			state.running = false
 		end
-
-		--p_kernel(state, require_stop, true)
 	end
 
 	return state.exitStatus, _iterations
@@ -1121,53 +857,52 @@ local function terminate()
 end
 
 -- Returns the running status flag
-local function is_running()
+local function isRunning()
+	-- TODO: Fix or remove
 	return running
 end
 
 
 
 
--- Initialize system
-init()
-
 instance = {
-	-- Manage event handlers
-	add_handler = add_handler,
-	remove_handler = remove_handler,
-	add_temp_handler = add_temp_handler, -- Part of tasks utility, but handles event and cannot be canceled
-
-	-- Tasks utility
-	schedule = schedule,
-	schedule_on_event = schedule_on_event,
-	cancel = cancel,
-	task_list = task_list,
-
-	-- Processes utility
+	-- Manage process state
 	start = start,
 	resume = resume,
 	suspend = suspend,
 	stop = stop,
 	priority = priority,
-	process_list = process_list,
+
+	processList = processList,
+
 	-- Process-specific utilties (should only be called in a process)
 	sleep = sleep,
 	wait = wait, -- Use the kernel/process_complete event outside of a process
 	fork = fork,
-	event_sleep = event_sleep,
-
-	-- Manage interface classes
-	add_interface = add_interface,
-	remove_interface = remove_interface,
+	eventSleep = eventSleep,
 
 	-- Misc utilites
 	atomic = atomic,
 
+	-- Plugins
+	plugins = {},
+	addPlugin = addPlugin,
+	removePlugin = removePlugin,
+
 	-- Run the kernel
-	run_until_event = run_until_event,
 	run = run,
 	terminate = terminate,
-	is_running = is_running
+	isRunning = isRunning
 }
+
+
+-- Allow plugins to be referenced as instance.<name> as well as instance.plugins.<name> as long as the name is available
+local alias = { __index = instance.plugins }
+setmetatable(instance, alias)
+
+
+-- Initialize system
+private.init()
+
 
 return instance
