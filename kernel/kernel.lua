@@ -195,7 +195,8 @@ function Process:run()
 
 	if self.state == ProcState.RUN then
 		local next = table.remove(self.events, 1)
-		coroutine.resume(self.proc, (next ~= nil and table.unpack(next) or nil))
+		if next == nil then next = {} end
+		coroutine.resume(self.proc, table.unpack(next))
 	end
 
 	return coroutine.status(self.proc) ~= "dead"
@@ -344,10 +345,16 @@ function private.changeState(proc, nice, state)
 	if state == ProcState.INVALID then stateStr = "X" end
 	_d_log:write(proc.pid.." > "..stateStr.."\n")
 
-	-- Suspended processes are in a sub-list
 	if proc.state == ProcState.WAIT or state == ProcState.WAIT then
 		error("Transition to/from wait") -- TODO: Remove
 	end
+
+	-- Can't transition out of stop
+	if proc.state == ProcState.STOP then
+		return
+	end
+
+	-- Suspended processes are in a sub-list
 	if proc.state == ProcState.SUSPEND then
 		if state == ProcState.SUSPEND then return end
 
@@ -560,28 +567,16 @@ local function eventSleep(timeout, ...)
 
 	-- Yield the process
 	local e = private.pullEvent()
-	if args:len() == 0 then
+	if #args == 0 then
 		return true
 	end
 
 	-- Wait for timeout or event
 	while true do
-		if e[1] == "timer" then
-			if e[2] == tid then
-				return false
-			end
-		elseif e[1] == args[1] then
-			local match = true
-			for i,v in pairs(args) do
-				if e[i] ~= args[i] then
-					match = false
-					break
-				end
-			end
-
-			if match then
-				return true, e:unpack()
-			end
+		if private.matchFilter({"timer", tid}, e) then
+			return false
+		elseif private.matchFilter(args, e) then
+			return true, table.unpack(e)
 		end
 
 		e = private.pullEvent()
@@ -760,7 +755,6 @@ end
 -- Process 0(priority -10): runs event handlers
 function private.p_kernel(state, require_stop, norep)
 	repeat
-		-- os.pullEventRaw yields
 		local event = private.pullEvent()
 
 		for name, inst in pairs(instance.plugins) do
@@ -768,7 +762,7 @@ function private.p_kernel(state, require_stop, norep)
 			local status = table.remove(ret, 1)
 
 			if not status then
-				print("K> "..name.." failed:", ret:unpack())
+				print("K> "..name.." failed:", table.unpack(ret))
 			end
 		end
 

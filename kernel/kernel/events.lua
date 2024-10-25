@@ -1,4 +1,7 @@
 -- <<<mltable>>>
+-- CC Modules
+local expect = require("cc.expect")
+
 -- Modules
 require("apis/mltable")
 
@@ -13,6 +16,9 @@ local interfaces = MLTable:new()
 -- Handler should expect a list of arguments as a table
 -- All registered handlers will be called
 local function addHandler(handler, maxLevel, ...)
+	expect(1, handler, "function")
+	expect(2, maxLevel, "number", "nil")
+
 	maxLevel = maxLevel or 0
 
 	handlers:add(handler, maxLevel, ...)

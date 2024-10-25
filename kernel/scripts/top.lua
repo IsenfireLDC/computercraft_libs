@@ -8,7 +8,7 @@ if _G._WINDOW then
 end
 
 local function ps()
-	local procs = kernel.process_list()
+	local procs = kernel.processList()
 	print("#"..#procs.." processes")
 
 	print("    PID  NICE STATE   ARGS")
@@ -18,7 +18,7 @@ local function ps()
 end
 
 local function tasks()
-	local tasks = kernel.task_list()
+	local tasks = kernel.tasks.taskList()
 	print("#"..#tasks.." tasks")
 
 	print("    TID  TIMER TIME EVERY")
