@@ -106,6 +106,19 @@
 
 -- TODO: DEBUG: Remove
 local _d_log = io.open("kernel.log", "w")
+local fEvent = io.open("events.log", "w")
+local function dbgEvent(e, f)
+	f = f or _d_log
+	if e == nil then
+		f:write(" nil>")
+	else
+		for _,v in ipairs(e) do
+			f:write(" ", tostring(v))
+		end
+		f:write(">")
+	end
+end
+
 
 -- CC Modules
 local expect = require("cc.expect")
@@ -177,6 +190,9 @@ function Process:new(obj)
 	setmetatable(obj, self)
 	self.__index = self
 
+	-- Initialize separate table for queue
+	obj.events = {}
+
 	return obj
 end
 function Process:__eq(other)
@@ -194,9 +210,32 @@ function Process:run()
 	end
 
 	if self.state == ProcState.RUN then
+		_d_log:write("QE> ", tostring(self.pid), ">")
+		-- Filter queued events
 		local next = table.remove(self.events, 1)
-		if next == nil then next = {} end
-		coroutine.resume(self.proc, table.unpack(next))
+		dbgEvent(next)
+		while next and not private.matchFilter(self.eventFilter, next) do
+			next = table.remove(self.events, 1)
+			dbgEvent(next)
+		end
+
+		if next == nil then
+			_d_log:write(" nomatch>\n")
+			-- Move to wait if no matching events
+			private.waitEventProc(self, current_priority, true)
+		else
+			_d_log:write(" run>\n")
+			local ret = { coroutine.resume(self.proc, table.unpack(next)) }
+			local status = table.remove(ret, 1)
+
+			-- Set filter from yield and wait if no events remaining in queue
+			self.eventFilter = ret
+			if #self.events == 0 then
+				private.waitEventProc(self, current_priority, true)
+			end
+		end
+
+		_d_log:write("QE> end\n")
 	end
 
 	return coroutine.status(self.proc) ~= "dead"
@@ -204,7 +243,23 @@ end
 
 
 -- [Helper]
---
+-- Moves a process in/out of the WAIT state
+function private.waitEventProc(proc, nice, wait)
+	if wait == nil then wait = true end
+
+	if wait then
+		private.changeState(proc, current_priority, ProcState.SUSPEND)
+		_d_log:write(proc.pid.." > W\n")
+		proc.state = ProcState.WAIT
+	else
+		_d_log:write(proc.pid.." > S\n")
+		proc.state = ProcState.SUSPEND
+		private.changeState(proc, nice, ProcState.RUN)
+	end
+end
+
+-- [Helper]
+-- Check if event matches the filter (empty filter matches all)
 function private.matchFilter(filter, event)
 	for i, p in ipairs(filter) do
 		if p ~= event[i] then
@@ -216,17 +271,18 @@ function private.matchFilter(filter, event)
 end
 
 -- [Helper]
---
+-- Add events to the queue for a process
 function private.queueProcEvent(proc, nice, event)
-	if private.matchFilter(proc.eventFilter, event) then
-		table.insert(proc.events, event)
-
-		if proc.state == ProcState.WAIT then
-			_d_log:write(proc.pid.." > S\n")
-			proc.state = ProcState.SUSPEND
-			private.changeState(proc, nice, ProcState.RUN)
+	-- If waiting, event queue is empty, so only add matching events
+	if proc.state == ProcState.WAIT then
+		if private.matchFilter(proc.eventFilter, event) then
+			private.waitEventProc(proc, nice, false)
+		else
+			return
 		end
 	end
+
+	table.insert(proc.events, event)
 end
 
 -- [Helper]
@@ -238,7 +294,13 @@ function private.processEvent()
 		return false
 	end
 
-	_d_log:write("E> ", table.unpack(event), "\n")
+	fEvent:write("E>")
+	dbgEvent(event, fEvent)
+	fEvent:write("\n")
+
+	_d_log:write("E>")
+	dbgEvent(event)
+	_d_log:write("\n")
 	for nice, procList in pairs(processes) do
 		for _, proc in ipairs(procList) do
 			private.queueProcEvent(proc, nice, event)
@@ -272,14 +334,7 @@ function private.requeueEvents(single)
 end
 
 function private.pullEvent(...)
-	current_process.eventFilter = { ... }
-	if #current_process.events == 0 then
-		private.changeState(current_process, current_priority, ProcState.SUSPEND)
-		_d_log:write(current_process.pid.." > W\n")
-		current_process.state = ProcState.WAIT
-	end
-
-	return { coroutine.yield() }
+	return { coroutine.yield(...) }
 end
 
 
@@ -501,14 +556,13 @@ local function sleep(time)
 		return false, "Not in a process"
 	end
 
-	-- TODO: What state should this be in?
 	-- Resume this process after the specified time
 	local tid = os.startTimer(time)
+	if tid == nil then error("K> Sleep: Failed to start timer") end
+	_d_log:write("sleep> ", tostring(tid), "\n")
 
 	-- Yield the process
 	private.pullEvent("timer", tid)
-
-	return true
 end
 
 
