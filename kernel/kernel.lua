@@ -104,22 +104,6 @@
 --
 -- -------------------- PROGRAM START --------------------
 
--- TODO: DEBUG: Remove
-local _d_log = io.open("kernel.log", "w")
-local fEvent = io.open("events.log", "w")
-local function dbgEvent(e, f)
-	f = f or _d_log
-	if e == nil then
-		f:write(" nil>")
-	else
-		for _,v in ipairs(e) do
-			f:write(" ", tostring(v))
-		end
-		f:write(">")
-	end
-end
-
-
 -- CC Modules
 local expect = require("cc.expect")
 
@@ -204,27 +188,21 @@ function Process:run()
 	end
 
 	if self.state == ProcState.INIT then
-		_d_log:write(self.pid.." > R\n")
 		self.state = ProcState.RUN
 		table.insert(self.events, 1, self.args)
 	end
 
 	if self.state == ProcState.RUN then
-		_d_log:write("QE> ", tostring(self.pid), ">")
 		-- Filter queued events
 		local next = table.remove(self.events, 1)
-		dbgEvent(next)
 		while next and not private.matchFilter(self.eventFilter, next) do
 			next = table.remove(self.events, 1)
-			dbgEvent(next)
 		end
 
 		if next == nil then
-			_d_log:write(" nomatch>\n")
 			-- Move to wait if no matching events
 			private.waitEventProc(self, current_priority, true)
 		else
-			_d_log:write(" run>\n")
 			local ret = { coroutine.resume(self.proc, table.unpack(next)) }
 			local status = table.remove(ret, 1)
 
@@ -234,8 +212,6 @@ function Process:run()
 				private.waitEventProc(self, current_priority, true)
 			end
 		end
-
-		_d_log:write("QE> end\n")
 	end
 
 	return coroutine.status(self.proc) ~= "dead"
@@ -249,10 +225,9 @@ function private.waitEventProc(proc, nice, wait)
 
 	if wait then
 		private.changeState(proc, current_priority, ProcState.SUSPEND)
-		_d_log:write(proc.pid.." > W\n")
+		-- TODO: Check state change
 		proc.state = ProcState.WAIT
 	else
-		_d_log:write(proc.pid.." > S\n")
 		proc.state = ProcState.SUSPEND
 		private.changeState(proc, nice, ProcState.RUN)
 	end
@@ -294,13 +269,6 @@ function private.processEvent()
 		return false
 	end
 
-	fEvent:write("E>")
-	dbgEvent(event, fEvent)
-	fEvent:write("\n")
-
-	_d_log:write("E>")
-	dbgEvent(event)
-	_d_log:write("\n")
 	for nice, procList in pairs(processes) do
 		for _, proc in ipairs(procList) do
 			private.queueProcEvent(proc, nice, event)
@@ -398,7 +366,6 @@ end
 function private.changeState(proc, nice, state)
 	local stateStr = stateToStr(state):sub(1, 1)
 	if state == ProcState.INVALID then stateStr = "X" end
-	_d_log:write(proc.pid.." > "..stateStr.."\n")
 
 	if proc.state == ProcState.WAIT or state == ProcState.WAIT then
 		error("Transition to/from wait") -- TODO: Remove
@@ -442,10 +409,8 @@ local function start(process, ...)
 		local g, msg = pcall(process, ...)
 
 		if g then
-			_d_log:write(proc.pid.." > F\n")
 			proc.state = ProcState.FINISH
 		else
-			_d_log:write(proc.pid.." > E\n")
 			proc.state = ProcState.ERROR
 		end
 
@@ -559,7 +524,6 @@ local function sleep(time)
 	-- Resume this process after the specified time
 	local tid = os.startTimer(time)
 	if tid == nil then error("K> Sleep: Failed to start timer") end
-	_d_log:write("sleep> ", tostring(tid), "\n")
 
 	-- Yield the process
 	private.pullEvent("timer", tid)
@@ -754,6 +718,8 @@ function private.sched_next()
 			proc_status = "finished"
 		elseif proc.state == ProcState.ERROR then
 			proc_status = "errored"
+		else
+			proc_status = "bad:"..stateToStr(proc.state)
 		end
 		os.queueEvent("kernel", "process_complete", proc.pid, proc_status, proc.msg)
 	end
