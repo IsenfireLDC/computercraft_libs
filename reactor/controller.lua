@@ -11,10 +11,6 @@ local reactor = peripheral.wrap("fissionReactorLogicAdapter_1")
 local turbine = peripheral.wrap("turbineValve_1")
 local buffer = peripheral.wrap("ultimateEnergyCube_1")
 
-local maxBurnRate = 20
-
-local defaultBurnRate = 0.5
-
 if _G.log == nil then
 	_G.log = {
 		info = function(...) print("Info:  ", ...) end,
@@ -50,7 +46,6 @@ local shutdown = scram
 
 -- Start the reactor
 local function startup()
-	reactor.setBurnRate(defaultBurnRate)
 	reactor.activate()
 end
 
@@ -91,12 +86,6 @@ local function getPowerConsumption()
 	local deltaV = level - lastBufferLevel
 	local output = getPowerProduction() - (deltaV / deltaT)
 
-	-- If buffer is overflowing, read a lower output value to reduce power
-	if output > 256000 then
-		output = 256000 -- Hardcode max rate; don't know why it's working so badly
-	end
-	--log.info("C> dT "..tostring(deltaT).."> dV "..tostring(deltaV).."> OUT "..tostring(output))
-
 	lastBufferReading = reading
 	lastBufferLevel = level
 
@@ -122,6 +111,7 @@ local closingFrac = 0.8  -- Buffer delta close rate goal (try to reduce the delt
 local maxPower = 256000  -- Max allowed power output for adjusting buffer
 -- Buffer max delta (don't exceed this fraction of the buffer per timestep while closing delta)
 local maxDelta = maxPower / getBufferMax()
+local maxBurnRate = 2    -- Max allowed burn rate
 -- ==================== End Settings =======================
 
 
@@ -187,19 +177,14 @@ local eFlow
 local function tune()
 	local iReactor = getPowerSetting()
 	local oReactor = getSteamProduction()
-	--log.info("Reactor> IN "..tostring(iReactor).."> OUT "..tostring(oReactor).."> EXP "..tostring(eReactor))
-	log.info("Tuning reactor; last error: "..(eReactor - oReactor))
 	reactorModel:tune(iReactor, oReactor, eReactor)
 
 	local iTurbine = getSteamConsumption()
 	local oTurbine = getPowerProduction()
-	--log.info("Turbine> IN "..tostring(iTurbine).."> OUT "..tostring(oTurbine).."> EXP "..tostring(eTurbine))
-	log.info("Tuning turbine; last error: "..(eTurbine - oTurbine))
 	turbineModel:tune(iTurbine, oTurbine, eTurbine)
 
 	local iFlow = oReactor;
 	local oFlow = iTurbine;
-	log.info("Tuning flow; last error: "..(eFlow - oFlow))
 	updateFlow(oFlow)
 end
 
@@ -215,18 +200,14 @@ local function adjust(noUpdate)
 	-- Calculate new power production
 	local output = getPowerConsumption() * timestep
 	local targetPowerProduction = (targetDelta * getBufferMax() + output) / timestep
-	--log.info("A> OUT "..tostring(output).."> DELTA "..tostring(targetDelta).."> BUF "..tostring(getBufferMax()))
-	log.info("Target power: "..targetPowerProduction)
 
 	-- Calculate new input levels
 	local targetSteamFlow = turbineModel:action(targetPowerProduction)
-	log.info("Target steam: "..targetSteamFlow)
 
 	local expectedFlow = predictFlow(slice(flowSteps, 1, flowSamples-1))
-	local targetSteamProduction = targetSteamFlow / flowModel:response(1)
+	local targetSteamProduction = targetSteamFlow / flowModel:response(1) - expectedFlow
 
 	local targetPowerLevel = reactorModel:action(targetSteamFlow)
-	log.info("Target setting: "..targetPowerLevel)
 
 	if not noUpdate then
 		if targetPowerLevel > maxBurnRate then
@@ -266,7 +247,6 @@ local function manage()
 		elseif cmd == "START" then
 			log.info("Starting reactor")
 			startup()
-			log.info("Started reactor")
 			instance.cmd = "RUN"
 		elseif cmd == "EXIT" then
 			log.info("Manager exiting")
@@ -277,7 +257,6 @@ local function manage()
 
 			return
 		elseif cmd == "RUN" then
-			log.info(">RUN")
 			if lastCmd ~= "RUN" then
 				log.info("Managing reactor")
 
@@ -287,8 +266,11 @@ local function manage()
 
 			tune()
 			eReactor, eTurbine, eFlow = adjust()
+		else
+			cmd = lastCmd
 		end
 
+		instance.status.state = cmd
 		lastCmd = cmd
 
 		kernel.sleep(timestep / 20)
@@ -309,13 +291,21 @@ local function failsafe()
 	end
 end
 
+-- Update status information
+local function statusUpdate()
+	instance.status.production = getPowerProduction()
+	instance.status.burnRate = getPowerSetting()
+end
+
 instance = {
-	cmd = "NONE"
+	cmd = "NONE",
+	status = {}
 }
 
 -- Schedule services and process
 kernel.tasks.schedule(failsafe, 1, 1)
+kernel.tasks.schedule(statusUpdate, 1, 1)
 kernel.tasks.schedule(saveModels, 30, 30)
-kernel.start(manage, "MANAGER")
+kernel.start(manage)
 
 return instance

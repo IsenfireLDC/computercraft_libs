@@ -51,12 +51,6 @@ function SystemModel:tune(x, actual)
 	local stepDelta = (adjustedStep - self.step) * self.adjustFraction
 	local scalingDelta = (adjustedScaling - self.scaling) * self.adjustFraction
 
-	--if _G.log then
-	--	_G.log.info("SM> step: "..self.step.."; scaling: "..self.scaling.."; adjust: "..self.adjustFraction)
-	--	_G.log.info("SM> step: "..adjustedStep.."; scaling: "..adjustedScaling)
-	--	_G.log.info("SM> diff-st: "..stepDelta.."; diff-sc: "..scalingDelta)
-	--end
-
 	self.step = self.step + stepDelta
 	self.scaling = self.scaling + scalingDelta
 end
