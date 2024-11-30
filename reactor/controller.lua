@@ -86,6 +86,11 @@ local function getPowerConsumption()
 	local deltaV = level - lastBufferLevel
 	local output = getPowerProduction() - (deltaV / deltaT)
 
+	-- Boost power if cube is empty
+	if deltaV == 0 and level == 0 then
+		output = output * 1.05
+	end
+
 	lastBufferReading = reading
 	lastBufferLevel = level
 
@@ -220,6 +225,10 @@ local function adjust(noUpdate)
 	return targetSteamFlow, targetPowerProduction, targetSteamProduction
 end
 
+local function sendUpdate()
+	-- TODO: Kludge
+	log.info({ type = "status", data = instance.status })
+end
 
 -- Handle commands and manage reactor
 local function manage()
@@ -255,7 +264,10 @@ local function manage()
 				shutdown()
 			end
 
-			return
+			for _,v in pairs(instance.tasks) do
+				kernel.tasks.cancel(v)
+			end
+			os.queueEvent("reactor", "manager_exit")
 		elseif cmd == "RUN" then
 			if lastCmd ~= "RUN" then
 				log.info("Managing reactor")
@@ -273,6 +285,10 @@ local function manage()
 		instance.status.state = cmd
 		lastCmd = cmd
 
+		if cmd == "EXIT" then
+			sendUpdate()
+			return
+		end
 		kernel.sleep(timestep / 20)
 	end
 end
@@ -295,6 +311,8 @@ end
 local function statusUpdate()
 	instance.status.production = getPowerProduction()
 	instance.status.burnRate = getPowerSetting()
+
+	sendUpdate()
 end
 
 instance = {
@@ -303,9 +321,11 @@ instance = {
 }
 
 -- Schedule services and process
-kernel.tasks.schedule(failsafe, 1, 1)
-kernel.tasks.schedule(statusUpdate, 1, 1)
-kernel.tasks.schedule(saveModels, 30, 30)
+instance.tasks = {
+	failsafe = kernel.tasks.schedule(failsafe, 1, 1),
+	status = kernel.tasks.schedule(statusUpdate, 1, 1),
+	models = kernel.tasks.schedule(saveModels, 30, 30)
+}
 kernel.start(manage)
 
 return instance
