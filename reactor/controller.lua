@@ -124,9 +124,9 @@ local maxBurnRate = 2    -- Max allowed burn rate
 
 
 -- Response Tuning
-local reactorModel = SystemModel:new{step=4000}
-local turbineModel = SystemModel:new{step=10}
-local flowModel = SystemModel:new{step=0.5, adjustFraction=0.05}
+local reactorModel = SystemModel:new{}
+local turbineModel = SystemModel:new{}
+local flowModel = SystemModel:new{adjustFraction=0.4}
 
 local flowSamples = 5
 local flowSteps = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }
@@ -147,8 +147,12 @@ local function slice(t, first, last)
 end
 local function updateFlow(val)
 	-- Shift flow data queue
-	if #flowSteps >= 2*flowSamples then table.remove(flowSteps) end
 	table.insert(flowSteps, 1, val)
+	if #flowSteps >= 2*flowSamples then
+		table.remove(flowSteps)
+	else
+		return
+	end
 
 	-- Tune a fixed step based on each of the positions in the window
 	for i=1,flowSamples,1 do
@@ -177,6 +181,17 @@ if not flowModel:load(files.flow) then log.warn("No flow model data") end
 local eReactor
 local eTurbine
 local eFlow
+
+-- Clamp helper function
+local function clamp(val, low, high)
+	if val < low then
+		return low
+	elseif val > high then
+		return high
+	else
+		return val
+	end
+end
 
 -- Tune the models with this tick's data
 local function tune()
@@ -208,16 +223,16 @@ local function adjust(noUpdate)
 
 	-- Calculate new input levels
 	local targetSteamFlow = turbineModel:action(targetPowerProduction)
+	--targetSteamFlow = clamp(targetSteamFlow, 0, math.huge)
 
 	local expectedFlow = predictFlow(slice(flowSteps, 1, flowSamples-1))
 	local targetSteamProduction = targetSteamFlow / flowModel:response(1) - expectedFlow
+	--local targetSteamProduction = targetSteamFlow
 
 	local targetPowerLevel = reactorModel:action(targetSteamFlow)
 
 	if not noUpdate then
-		if targetPowerLevel > maxBurnRate then
-			targetPowerLevel = maxBurnRate
-		end
+		targetPowerLevel = clamp(targetPowerLevel, 0, maxBurnRate)
 
 		reactor.setBurnRate(targetPowerLevel)
 	end
@@ -268,6 +283,10 @@ local function manage()
 				kernel.tasks.cancel(v)
 			end
 			os.queueEvent("reactor", "manager_exit")
+		elseif cmd == "RESET" then
+			log.info("Resetting...")
+
+			os.reboot()
 		elseif cmd == "RUN" then
 			if lastCmd ~= "RUN" then
 				log.info("Managing reactor")

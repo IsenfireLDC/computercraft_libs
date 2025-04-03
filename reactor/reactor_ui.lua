@@ -9,6 +9,9 @@ _G.log = logger
 local comm = require("apis/comm")
 require("apis/remote_logger")
 
+local desyncTime
+local desync = false
+local statusTime = os.clock()
 local status = {}
 
 local statusWindow
@@ -27,9 +30,12 @@ local function setup()
 	logWindow.setTextColor(colors.white)
 end
 
-local function niceUnits(val, base)
+local function niceUnits(val, base, bin)
 	if val == nil then val = 0 end
 	if base == nil then return '' end
+
+	local mul = 1000
+	if bin then mul = 1024 end
 
 	local big = { 'k', 'M', 'G', 'T' }
 	local small = { 'm', 'u', 'n', 'p' }
@@ -100,6 +106,22 @@ local function displayStatus()
 		statusWindow.setBackgroundColor(colors.red)
 	end
 	statusWindow.write("STOP")
+
+	--statusWindow.write(niceUnits(os.clock() - statusTime, "s"))
+	if os.clock() - statusTime > 10 then
+		if not desync or os.clock() - desyncTime > 10 then
+			comm.send({ type = 'cmd', cmd = 'RESET', reason = "Loss of Communication" })
+			desyncTime = os.clock()
+			desync = true
+		end
+
+		statusWindow.setCursorPos(18, 5)
+		statusWindow.setBackgroundColor(colors.black)
+		statusWindow.setTextColor(colors.red)
+		statusWindow.write("DESYNC")
+	else
+		desync = false
+	end
 end
 
 local function handleClick(event)
@@ -130,6 +152,7 @@ function logger.info(...)
 	-- TODO: Kludge
 	local args = table.pack(...)
 	if type(args[1]) == "table" and args[1].type == "status" then
+		statusTime = os.clock()
 		status = args[1].data
 	else
 		printRedir("Info:  ", ...)
