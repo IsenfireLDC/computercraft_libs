@@ -21,7 +21,7 @@ local instance = {}
 
 
 
-function matchEventFilter(filter, event)
+local function matchEventFilter(filter, event)
 	-- Assume empty filter if .n is nil
 	if filter.n == nil then return true end
 
@@ -321,6 +321,8 @@ function ProcessTable:setNice(pid, val)
 	end
 
 	process.nice = val
+
+	return true
 end
 
 function ProcessTable:sendEvent(pid, event)
@@ -551,7 +553,9 @@ end
 
 
 local function start(func, ...)
-	if not func then return nil, "Process cannot be nil" end
+	if not func then
+		return nil, "Process cannot be nil"
+	end
 
 	local pid = nextPid()
 	local process = Process:new{
@@ -606,7 +610,7 @@ end
 -- Wait for an event with timeout
 -- Can wait for process completion via the kernel/process_complete event
 local function wait(timeout, ...)
-	if timeout then
+	if timeout and timeout >= 0 then
 		local tId = os.startTimer(timeout)
 		local filter = table.pack(...)
 		while true do
@@ -626,6 +630,10 @@ end
 -- Run a function to completion without yielding to CC
 -- The function cannot handle events, wait, etc
 local function atomic(func, ...)
+	if func == nil then
+		return false, "Function cannot be nil"
+	end
+
 	-- The ... doesn't carry into the coroutine function
 	local args = table.pack(...)
 	local status = {}
@@ -642,6 +650,27 @@ local function atomic(func, ...)
 	until coroutine.status(c) == "dead"
 
 	return status.g, status.msg
+end
+
+-- Create a regularly scheduled task from the given function
+-- Return value can be used to create a process
+local function task(func, period)
+	if not func then
+		return nil, "Need function"
+	elseif not period then
+		return nil, "Need period"
+	end
+
+	return function(...)
+		local time = os.time() * 50 -- in-game time in seconds
+
+		while func(...) do
+			time = time + period
+			local aId = os.setAlarm(time / 50)
+
+			instance.wait(nil, "alarm", aId)
+		end
+	end
 end
 
 
@@ -726,6 +755,7 @@ instance = {
 	-- Misc utilities
 	wait = wait,
 	atomic = atomic,
+	task = task,
 
 	-- Run the kernel
 	run = run,
