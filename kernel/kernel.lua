@@ -171,11 +171,12 @@ local Process = {
 function Process:new(obj)
 	obj = obj or {}
 
-	setmetatable(obj, self)
-	self.__index = self
-
 	-- Initialize separate table for queue
 	obj.events = {}
+	obj.eventFilter = {}
+
+	setmetatable(obj, self)
+	self.__index = self
 
 	return obj
 end
