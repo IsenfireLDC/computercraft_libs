@@ -22,7 +22,12 @@ local instance = {}
 
 
 function matchEventFilter(filter, event)
-	for i, p in ipairs(filter) do
+	-- Assume empty filter if .n is nil
+	if filter.n == nil then return true end
+
+	for i=1,filter.n,1 do
+		local p = filter[i]
+
 		if p ~= nil and p ~= event[i] then
 			return false
 		end
@@ -663,6 +668,12 @@ local function p_kernel(state, require_stop, norep)
 end
 
 local function run(require_stop)
+	if instance.running then
+		return "Already running"
+	end
+
+	instance.running = true
+
 	local state = {
 		running = true,
 		exitStatus = "Unknown"
@@ -690,6 +701,8 @@ local function run(require_stop)
 		end
 	end
 
+	instance.running = false
+
 	return state.exitStatus
 end
 
@@ -716,6 +729,7 @@ instance = {
 
 	-- Run the kernel
 	run = run,
+	running = running,
 	terminate = terminate
 }
 
