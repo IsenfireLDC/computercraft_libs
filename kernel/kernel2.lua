@@ -498,8 +498,8 @@ scheduler:addLevel(DEFAULT_NICE)
 
 
 -- Get the next event
-local function nextEvent()
-	return table.pack( coroutine.yield() )
+local function nextEvent(...)
+	return table.pack( coroutine.yield(...) )
 end
 
 local lastYield = os.clock()
@@ -598,6 +598,27 @@ end
 
 
 
+local function wait(timeout, ...)
+	if timeout then
+		local tId = os.startTimer(timeout)
+		local filter = table.pack(...)
+		while true do
+			local event = nextEvent()
+
+			if event[1] == "timer" and event[2] == tId then
+				return nil, "timeout"
+			elseif matchEventFilter(filter, event) then
+				return event
+			end
+		end
+	else
+		return nextEvent(...)
+	end
+end
+
+
+
+
 local function p_kernel(state, require_stop, norep)
 	repeat
 		local event = nextEvent()
@@ -663,6 +684,10 @@ instance = {
 	suspend = suspend,
 	stop = stop,
 	nice = nice,
+
+	-- Misc utilities
+	wait = wait,
+	atomic = atomic,
 
 	-- Run the kernel
 	run = run,
