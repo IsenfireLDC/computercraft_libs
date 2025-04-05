@@ -699,6 +699,8 @@ end
 
 
 
+-- Seed RNG
+math.randomseed(os.computerID() * os.clock() + os.computerID())
 
 instance = {
 	-- Manage process state
