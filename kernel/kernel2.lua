@@ -23,7 +23,7 @@ local instance = {}
 
 function matchEventFilter(filter, event)
 	for i, p in ipairs(filter) do
-		if p ~= event[i] then
+		if p ~= nil and p ~= event[i] then
 			return false
 		end
 	end
@@ -598,6 +598,8 @@ end
 
 
 
+-- Wait for an event with timeout
+-- Can wait for process completion via the kernel/process_complete event
 local function wait(timeout, ...)
 	if timeout then
 		local tId = os.startTimer(timeout)
@@ -614,6 +616,27 @@ local function wait(timeout, ...)
 	else
 		return nextEvent(...)
 	end
+end
+
+-- Run a function to completion without yielding to CC
+-- The function cannot handle events, wait, etc
+local function atomic(func, ...)
+	-- The ... doesn't carry into the coroutine function
+	local args = table.pack(...)
+	local status = {}
+
+	local c = coroutine.create(function()
+		local g, msg = pcall(func, table.unpack(args))
+
+		status.g = g
+		status.msg = msg
+	end)
+
+	repeat
+		coroutine.resume(c)
+	until coroutine.status(c) == "dead"
+
+	return status.g, status.msg
 end
 
 
