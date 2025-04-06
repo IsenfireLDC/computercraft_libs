@@ -1,6 +1,7 @@
--- <<<table_extensions>>>
+-- <<<interface:kernel/driver|extension:table>>>
 
 require("apis/table_extensions")
+require("apis/driver")
 
 
 -- TODO
@@ -171,7 +172,7 @@ function Process:wait()
 end
 
 function Process:tick()
-	if self.state == ProcessState.STOP then
+	if self.state == ProcessState.STOP or self.state == ProcessState.FINISH or self.state == ProcessState.ERROR then
 		return false
 	elseif self.state == ProcessState.INIT then
 		self:init()
@@ -481,7 +482,13 @@ function ProcessScheduler:run()
 		elseif process.state == ProcessState.ERROR then
 			status = "errored"
 		else
-			status = "bad:" .. stateToStr(process.state)
+			status = "faulted"
+			local msg = "Died in state "..stateToStr(process.state)
+			if process.msg then
+				process.msg = msg .. ": " .. process.msg
+			else
+				process.msg = msg
+			end
 		end
 
 		os.queueEvent("kernel", "process_complete", process.pid, status, process.msg)
@@ -676,16 +683,145 @@ end
 
 
 
+local peripherals = {
+	connected = {},
+	drivers = {
+		raw = {}
+	}
+}
+
+local function attachDriver(type, side, device)
+	if instance.drivers[type] ~= nil then
+		peripherals.drivers[type][side] = instance.drivers[type]:new{
+			side = side,
+			type = type,
+			device = device
+		}
+	end
+end
+
+local function addDriver(type, driver)
+	if instance.drivers[type] then
+		return false, "Already have a driver for type "..type
+	end
+
+	instance.drivers[type] = driver
+	peripherals.drivers[type] = {}
+
+	-- Attach this driver to any existing peripherals with this type
+	for side,info in pairs(peripherals.connected) do
+		for i=1,info.types.n,1 do
+			local t = info.types[i]
+
+			if t == type then
+				attachDriver(t, side, info.device)
+			end
+		end
+	end
+
+	return true
+end
+local function removeDriver(type)
+	if not instance.drivers[type] then
+		return false, "No driver with type "..type
+	end
+
+	-- Cleanup all driver instances first
+	for side,driver in pairs(peripherals.drivers[type]) do
+		driver:cleanup()
+	end
+
+	peripherals.drivers[type] = nil
+	instance.drivers[type] = nil
+
+	return true
+end
+
+local function attachPeripheral(side)
+	local types = table.pack(peripheral.getType(side))
+	local periph = peripheral.wrap(side)
+
+	peripherals.connected[side] = {
+		types = types,
+		device = periph
+	}
+
+	-- Always provide a 'raw' driver as default
+	peripherals.drivers.raw[side] = RawDriver:new{
+		side = side,
+		type = 'raw',
+		device = periph
+	}
+
+	for i=1,types.n,1 do
+		local type = types[i]
+
+		attachDriver(type, side, periph)
+	end
+
+	os.queueEvent("kernel", "device", "attach", side, types)
+end
+local function detachPeripheral(side)
+	local device = peripherals.connected[side]
+	if not device then return end
+
+	for i=1,device.types.n,1 do
+		local type = device.types[i]
+
+		if instance.drivers[type] ~= nil and peripherals.drivers[type][side] ~= nil then
+			peripherals.drivers[type][side]:cleanup()
+			peripherals.drivers[type][side] = nil
+		end
+	end
+
+	peripherals.drivers.raw[side]:cleanup()
+	peripherals.drivers.raw[side] = nil
+
+	peripherals.connected[side] = nil
+
+	os.queueEvent("kernel", "device", "detach", side, device.types)
+end
+
+
+local function device(side, type)
+	if not peripherals.connected[side] then
+		return nil, "No device on side "..side
+	end
+
+	local ofType = peripherals.drivers[type]
+	if not ofType then
+		return nil, "No driver for type "..type
+	end
+
+	local dev = ofType[side]
+	if not dev then
+		return nil, "Device is not of type "..type
+	end
+
+	return dev
+end
+
+
+
+
 local function p_kernel(state, require_stop, norep)
+	for _,name in ipairs(peripheral.getNames()) do
+		attachPeripheral(name)
+	end
+
 	repeat
 		local event = nextEvent()
 
-		-- Send a terminate event before exiting
-		if event[1] == "stop_kernel" then
-			os.queueEvent("terminate", "stop_kernel")
+		if event[1] == 'peripheral' then
+			attachPeripheral(event[2])
+		elseif event[1] == 'peripheral_detach' then
+			detachPeripheral(event[2])
 		end
 
-		if event[1] == "terminate" then
+		if event[1] == "stop_kernel" then
+			-- Send a terminate event before exiting
+			os.queueEvent("terminate", "stop_kernel")
+		elseif event[1] == "terminate" then
 			-- If require_stop then exit only on handling the special terminate
 			-- event.  Otherwise exit on any terminate event
 			if not require_stop or event[2] == "stop_kernel" then
@@ -694,6 +830,10 @@ local function p_kernel(state, require_stop, norep)
 			end
 		end
 	until norep or not state.running
+
+	for name,device in pairs(peripherals.connected) do
+		detachPeripheral(name)
+	end
 end
 
 local function run(require_stop)
@@ -756,6 +896,13 @@ instance = {
 	wait = wait,
 	atomic = atomic,
 	task = task,
+
+	-- Peripheral drivers
+	drivers = {},
+	addDriver = addDriver,
+	removeDriver = removeDriver,
+
+	device = device,
 
 	-- Run the kernel
 	run = run,
