@@ -112,10 +112,10 @@ end
 
 function Process:queueEvent(e)
 	-- If the event queue is empty, and this event does not match the filter, drop it
-	if #self.events == 0 then
-		if not matchEventFilter(self.eventFilter, e) then
+	if self.state == ProcessState.WAIT then
+		if #self.events == 0 and not matchEventFilter(self.eventFilter, e) then
 			return false
-		elseif self.state == ProcessState.WAIT then
+		else
 			self:transition(ProcessState.RUN)
 		end
 	end
@@ -151,7 +151,9 @@ function Process:init()
 	-- Start coroutine with input arguments
 	local status = self:runProc(table.unpack(self.args))
 
-	self:transition(ProcessState.RUN)
+	if status and self.state == ProcessState.INIT then
+		self:transition(ProcessState.RUN)
+	end
 end
 
 function Process:run()
@@ -248,7 +250,7 @@ function ProcessTable:addProcess(process)
 
 	self.processes[pid] = process
 	process._onTransition = function(proc, from, to)
-		self:transition(proc.pid, from, to)
+		return self:transition(proc.pid, from, to)
 	end
 
 	self:transition(pid, ProcessState.INVALID, process.state)
@@ -592,6 +594,20 @@ local function start(func, ...)
 	return pid
 end
 
+local function exec(path, ...)
+	if not path then
+		return nil, "Need file path"
+	end
+
+	if not fs.exists(path) then
+		return nil, "Path '"..path.."' does not exist"
+	end
+
+	local func = loadfile(path, nil, _ENV)
+
+	return start(func, ...)
+end
+
 local function resume(pid)
 	return processes:transition(pid, ProcessState.RUN)
 end
@@ -887,6 +903,7 @@ math.randomseed(os.computerID() * os.clock() + os.computerID())
 instance = {
 	-- Manage process state
 	start = start,
+	exec = exec,
 	resume = resume,
 	suspend = suspend,
 	stop = stop,
