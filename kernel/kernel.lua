@@ -189,7 +189,10 @@ end
 
 function Process:transition(state)
 	if self._onTransition then
-		self:_onTransition(self.state, state)
+		local g, msg = self:_onTransition(self.state, state)
+		if not g then
+			print("p["..self.pid.."]> "..msg)
+		end
 	end
 
 	self.state = state
@@ -359,7 +362,7 @@ function ProcessTable:runnable()
 end
 
 function ProcessTable:hasRunnable()
-	if #self.active > 0 then
+	if table.len(self.active) > 0 then
 		return true
 	end
 
@@ -714,6 +717,16 @@ local function attachDriver(type, side, device)
 			device = device
 		}
 	end
+
+	os.queueEvent("kernel", "driver", "attach", side, type)
+end
+local function detachDriver(type, side)
+	if instance.drivers[type] ~= nil and peripherals.drivers[type][side] ~= nil then
+		peripherals.drivers[type][side]:cleanup()
+		peripherals.drivers[type][side] = nil
+	end
+
+	os.queueEvent("kernel", "driver", "detach", side, type)
 end
 
 local function addDriver(type, driver)
@@ -784,10 +797,7 @@ local function detachPeripheral(side)
 	for i=1,device.types.n,1 do
 		local type = device.types[i]
 
-		if instance.drivers[type] ~= nil and peripherals.drivers[type][side] ~= nil then
-			peripherals.drivers[type][side]:cleanup()
-			peripherals.drivers[type][side] = nil
-		end
+		detachDriver(type, side)
 	end
 
 	peripherals.drivers.raw[side]:cleanup()
@@ -813,6 +823,10 @@ local function findDevices(type)
 	return sideList
 end
 local function device(side, type)
+	if not side then
+		return nil, "Invalid side"
+	end
+
 	if not peripherals.connected[side] then
 		return nil, "No device on side "..side
 	end
