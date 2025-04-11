@@ -4,7 +4,7 @@
 
 local SER_SIZE = string.packsize("nnnn")
 
-SystemModel = {
+Model = {
 	-- output = step * input ^ scaling
 	step = 1,
 	scaling = 1,
@@ -15,7 +15,7 @@ SystemModel = {
 	samples = nil
 }
 
-function SystemModel:new(obj)
+function Model:new(obj)
 	obj = obj or {}
 
 	if not obj.samples then
@@ -30,11 +30,11 @@ end
 
 
 -- Return response for given input
-function SystemModel:response(x)
+function Model:response(x)
 	return self.step * x ^ self.scaling
 end
 -- Return input to make given response
-function SystemModel:action(x)
+function Model:action(x)
 	return (x / self.step) ^ (1 / self.scaling)
 end
 
@@ -137,7 +137,7 @@ end
 
 -- Calculate the `true` values based on one sample per parameter, then check if the adjustment produces a better MSE
 -- If it does, use the new model
-function SystemModel:tune(x, actual)
+function Model:tune(x, actual)
 	addSample(self, x, actual)
 
 	if #self.samples < 4 then return end
@@ -188,7 +188,7 @@ local function saveVals(self)
 	self.file:write(string.pack("nnnn", self.step, self.scaling, self.adjustFraction, self.sampleCount))
 end
 
-function SystemModel:load(filename)
+function Model:load(filename)
 	if filename then
 		self.file = io.open(filename, 'r+b')
 	end
@@ -201,7 +201,7 @@ function SystemModel:load(filename)
 	return false
 end
 
-function SystemModel:save(filename)
+function Model:save(filename)
 	if filename then
 		self.file = io.open(filename, 'r+b')
 
