@@ -799,6 +799,19 @@ local function detachPeripheral(side)
 end
 
 
+local function findDevices(type)
+	local ofType = peripherals.drivers[type]
+	if not ofType then
+		return nil, "No driver for type "..type
+	end
+
+	local sideList = {}
+	for side, dev in pairs(ofType) do
+		table.insert(sideList, side)
+	end
+
+	return sideList
+end
 local function device(side, type)
 	if not peripherals.connected[side] then
 		return nil, "No device on side "..side
@@ -919,6 +932,7 @@ instance = {
 	addDriver = addDriver,
 	removeDriver = removeDriver,
 
+	findDevices = findDevices,
 	device = device,
 
 	-- Run the kernel
