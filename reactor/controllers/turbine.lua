@@ -75,13 +75,14 @@ function TurbineController:run()
 
 		count = count + 1
 		if count >= 30 then
+			self:saveModel()
 			count = 0
 		end
 
 		sleep(1)
 	end
 end
-function ReactorController:cmd()
+function TurbineController:cmd()
 	while true do
 		local event = kernel.wait(nil, "reactor", "command", "turbine", self.id)
 

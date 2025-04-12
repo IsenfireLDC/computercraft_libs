@@ -130,7 +130,7 @@ function ReactorController:run()
 
 			local setting = self:limit("burn", self.model:action(self.target))
 			local delta = setting - self.driver:getBurnRate()
-			if math.abs(delta) > self.limits.burn.max / 4 then
+			if delta > self.limits.burn.max / 4 then
 				setting = self.driver:getBurnRate() + (self.limits.burn.max / 4 * (delta > 0 and 1 or -1))
 			end
 
@@ -139,6 +139,7 @@ function ReactorController:run()
 
 		count = count + 1
 		if count >= 30 then
+			self:saveModel()
 			count = 0
 		end
 
