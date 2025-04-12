@@ -3,6 +3,8 @@
 require("interfaces/kernel/driver")
 
 ReactorDriver = IDriver:new{
+	ready = nil,
+
 	start = nil,
 	stop = nil,
 	scram = nil,

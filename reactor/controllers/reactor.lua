@@ -123,6 +123,7 @@ function ReactorController:run()
 			self.driver:stop()
 			self:transition("ready")
 		elseif self.state == "run" then
+			-- TODO: getInput?
 			local input = self.driver:getBurnRate()
 			local output = self.driver:getOutput()
 			self.model:tune(input, output)
@@ -178,8 +179,9 @@ function ReactorController:failsafe()
 end
 function ReactorController:cmd()
 	while true do
-		local event = kernel.wait(nil, "reactor", "command", self.id)
+		local event = kernel.wait(nil, "reactor", "command", "reactor", self.id)
 
-		self:command(table.unpack(event, 4))
+		local response = table.pack(self:command(table.unpack(event, 5)))
+		os.queueEvent("reactor", "response", "reactor", self.id, table.unpack(response))
 	end
 end

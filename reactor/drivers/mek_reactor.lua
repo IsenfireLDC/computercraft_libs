@@ -4,6 +4,10 @@ require("interfaces/reactor/reactor")
 
 MekReactorDriver = ReactorDriver:new{}
 
+function MekReactorDriver:ready()
+	return self.device and self.device.isFormed()
+end
+
 function MekReactorDriver:start()
 	self.device.setBurnRate(0)
 

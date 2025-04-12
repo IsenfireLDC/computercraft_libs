@@ -8,6 +8,8 @@ require("apis/model")
 --
 -- Optional overrides:
 -- self:resetLimits()
+-- self:failsafe()
+-- self.driverType
 
 IController = {
 	modelFile = nil,
@@ -31,22 +33,18 @@ end
 
 -- Start supplied processes
 function IController:start()
-	print("Controller start")
 	if self.driverType then
-		print("Finding driver...")
 		self:getDriver(self.driverType)
-		print("Driver:")
-		for k,v in pairs(self.driver) do
-			print("> "..k..":", v)
+
+		while not self.driver:ready() do
+			sleep(1)
 		end
 	end
 
-	print("Starting main process")
 	kernel.start(self.run, self)
 
 	-- Failsafe will be run at a higher priority
 	if self.failsafe then
-		print("Starting failsafe")
 		local p_fs = kernel.start(self.failsafe, self)
 
 		kernel.nice(p_fs, -2)
