@@ -146,3 +146,27 @@ function table.len(t, level, found)
 
 	return len
 end
+
+function table.merge(...)
+	local tables = table.pack(...)
+
+	local merged = { n = 0 }
+
+	for i=1,tables.n,1 do
+		local tab = tables[i]
+
+		if tab.n then
+			for j=1,tab.n,1 do
+				table.insert(merged, tab[i])
+				merged.n = merged.n + 1
+			end
+		else
+			for _,v in ipairs(tab) do
+				table.insert(merged, v)
+				merged.n = merged.n + 1
+			end
+		end
+	end
+
+	return merged
+end
