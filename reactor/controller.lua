@@ -1,350 +1,93 @@
--- <<<kernel|system>>>
--- Reactor Controller (Mekanism)
+-- <<<api:kernel,pid>>>
+-- Reactor Controller
 
 local kernel = require("apis/kernel")
-require("apis/system")
+require("apis/pid")
 
-local instance
+Controller = {
+	id = 'default',
+	reactor = nil, -- ReactorController
+	turbine = nil, -- TurbineController
+	buffer = nil   -- BufferDriver
+}
 
--- =================== Adjustable IO =======================
-local reactor = peripheral.wrap("fissionReactorLogicAdapter_1")
-local turbine = peripheral.wrap("turbineValve_1")
-local buffer = peripheral.wrap("ultimateEnergyCube_1")
+function Controller:new(obj)
+	obj = obj or {}
 
-if _G.log == nil then
-	_G.log = {
-		info = function(...) print("Info:  ", ...) end,
-		warn = function(...) print("Warn:  ", ...) end,
-		error = function(...) printError("Err:   ", ...) end
+	setmetatable(obj, self)
+	self.__index = self
+
+	return obj
+end
+
+function Controller.init(reactor, turbine, buffer, id, pid)
+	return Controller:new{
+		id = id or 'default',
+		reactor = reactor,
+		turbine = turbine,
+		buffer = buffer,
+		pid = pid or PID.init(0.1, 0.0001, 0.1, 0.05, 20*5)
 	}
 end
 
--- Return if the reactor is in an unsafe state
-local protectMsg
-local function reactorUnsafe()
-	if reactor.getTemperature() > 1100 then
-		protectMsg = "High temperature"
-		return true
+function Controller:start()
+	self.reactor:start()
+	self.turbine:start()
+
+	while not self.buffer:ready() do
+		sleep(1)
 	end
 
-	return false
+	kernel.start(self.run, self)
 end
 
--- Kill the reactor (emergency shutdown)
-local function scram()
-	if reactor.getStatus() then
-		reactor.scram()
-	end
+function Controller:command(...)
+	local cmd = table.pack(...)
 
-	if protectMsg then
-		log.error(protectMsg)
-	end
-end
+	if cmd[1] == 'status' then
+		local g, reactor = self.reactor:command('status')
+		local g, turbine = self.turbine:command('status')
 
--- Shutdown reactor (also scram in mekanism)
-local shutdown = scram
+		local status = {
+			reactor = reactor,
+			turbine = turbine,
+			buffer = {
+				level = self.buffer:getLevel(),
+				max = self.buffer:getMax(),
+			}
+		}
 
--- Start the reactor
-local function startup()
-	reactor.activate()
-end
-
--- Return if reactor is active
-local function reactorRunning()
-	return reactor.getStatus()
-end
-
--- Return power setting of the reactor
-local function getPowerSetting()
-	return reactor.getBurnRate()
-end
-
--- Return reactor steam output / tick
-local function getSteamProduction()
-	return reactor.getHeatingRate()
-end
-
--- Return turbine steam usage / tick
-local function getSteamConsumption()
-	return turbine.getFlowRate()
-end
-
--- Return turbine power production / tick
-local function getPowerProduction()
-	return turbine.getProductionRate()
-end
-
--- Return buffer power output / tick
--- 'ingame' epoch doesn't change
-local lastBufferReading = os.epoch('utc') / 50
-local lastBufferLevel = buffer.getEnergy()
-local function getPowerConsumption()
-	local reading = os.epoch('utc') / 50
-	local level = buffer.getEnergy()
-
-	local deltaT = reading - lastBufferReading
-	local deltaV = level - lastBufferLevel
-	local output = getPowerProduction() - (deltaV / deltaT)
-
-	-- Boost power if cube is empty
-	if deltaV == 0 and level == 0 then
-		output = output * 1.05
-	end
-
-	lastBufferReading = reading
-	lastBufferLevel = level
-
-	return output
-end
-
--- Return buffer fill fraction
-local function getBufferLevel()
-	return buffer.getEnergyFilledPercentage()
-end
-
--- Return buffer capacity
-local function getBufferMax()
-	return buffer.getMaxEnergy()
-end
--- ================= End Adjustable IO =====================
-
-
--- ====================== Settings =========================
-local bufferTarget = 0.5 -- Target fill fraction
-local timestep = 20      -- Timestep (ticks) for following parameters
-local closingFrac = 0.8  -- Buffer delta close rate goal (try to reduce the delta to target by x fraction per timestep)
-local maxPower = 256000  -- Max allowed power output for adjusting buffer
--- Buffer max delta (don't exceed this fraction of the buffer per timestep while closing delta)
-local maxDelta = maxPower / getBufferMax()
-local maxBurnRate = 2    -- Max allowed burn rate
--- ==================== End Settings =======================
-
-
-
-
-
--- Response Tuning
-local reactorModel = SystemModel:new{}
-local turbineModel = SystemModel:new{}
-local flowModel = SystemModel:new{adjustFraction=0.4}
-
-local flowSamples = 5
-local flowSteps = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }
-local function predictFlow(steps)
-	local y = 0
-	for i=1,#steps,1 do
-		y = y + flowModel:response(i) * steps[i]
-	end
-	return y
-end
-local function slice(t, first, last)
-	local newT = {}
-	for i=first,last,1 do
-		table.insert(newT, t[i])
-	end
-
-	return newT
-end
-local function updateFlow(val)
-	-- Shift flow data queue
-	table.insert(flowSteps, 1, val)
-	if #flowSteps >= 2*flowSamples then
-		table.remove(flowSteps)
-	else
-		return
-	end
-
-	-- Tune a fixed step based on each of the positions in the window
-	for i=1,flowSamples,1 do
-		local steps = slice(flowSteps, i, i+flowSamples)
-		steps[flowSamples - i + 1] = 0 -- Zero out the tuning location
-		local carry = predictFlow(steps)
-
-		local current = flowSteps[flowSamples] - carry -- Current tick effects only
-		local resp = current / flowSteps[flowSamples]  -- Convert to value 0-1
-		flowModel:tune(i, resp)
-	end
-end
-
-local files = {
-	reactor = "data/model/reactor.dat",
-	turbine = "data/model/turbine.dat",
-	flow = "data/model/flow.dat"
-}
-
-if not reactorModel:load(files.reactor) then log.warn("No reactor model data") end
-if not turbineModel:load(files.turbine) then log.warn("No turbine model data") end
-if not flowModel:load(files.flow) then log.warn("No flow model data") end
-
-
--- Expected values from last timestep
-local eReactor
-local eTurbine
-local eFlow
-
--- Clamp helper function
-local function clamp(val, low, high)
-	if val < low then
-		return low
-	elseif val > high then
-		return high
-	else
-		return val
-	end
-end
-
--- Tune the models with this tick's data
-local function tune()
-	local iReactor = getPowerSetting()
-	local oReactor = getSteamProduction()
-	reactorModel:tune(iReactor, oReactor, eReactor)
-
-	local iTurbine = getSteamConsumption()
-	local oTurbine = getPowerProduction()
-	turbineModel:tune(iTurbine, oTurbine, eTurbine)
-
-	local iFlow = oReactor;
-	local oFlow = iTurbine;
-	updateFlow(oFlow)
-end
-
--- Adjust the reactor settings
-local function adjust(noUpdate)
-	-- Calculate next target level
-	local level = getBufferLevel()
-	local targetDelta = (bufferTarget - level) * closingFrac
-	if math.abs(targetDelta) > maxDelta then
-		targetDelta = maxDelta * (targetDelta < 0 and -1 or 1)
-	end
-
-	-- Calculate new power production
-	local output = getPowerConsumption() * timestep
-	local targetPowerProduction = (targetDelta * getBufferMax() + output) / timestep
-
-	-- Calculate new input levels
-	local targetSteamFlow = turbineModel:action(targetPowerProduction)
-	--targetSteamFlow = clamp(targetSteamFlow, 0, math.huge)
-
-	local expectedFlow = predictFlow(slice(flowSteps, 1, flowSamples-1))
-	local targetSteamProduction = targetSteamFlow / flowModel:response(1) - expectedFlow
-	--local targetSteamProduction = targetSteamFlow
-
-	local targetPowerLevel = reactorModel:action(targetSteamFlow)
-
-	if not noUpdate then
-		targetPowerLevel = clamp(targetPowerLevel, 0, maxBurnRate)
-
-		reactor.setBurnRate(targetPowerLevel)
-	end
-
-	return targetSteamFlow, targetPowerProduction, targetSteamProduction
-end
-
-local function sendUpdate()
-	-- TODO: Kludge
-	log.info({ type = "status", data = instance.status })
-end
-
--- Handle commands and manage reactor
-local function manage()
-	local lastCmd = "NONE"
-
-	log.info("Manager started")
-	if reactorRunning() then
-		instance.cmd = "RUN"
-	end
-
-	while true do
-		--log.info("<Loop>")
-
-		-- A mutex would be nice...
-		local cmd = instance.cmd
-
-		if cmd == "SCRAM" then
-			scram()
-			log.info("Reactor scrammed")
-			instance.cmd = "NONE"
-		elseif cmd == "STOP" then
-			log.info("Stopping reactor")
-			shutdown()
-			instance.cmd = "NONE"
-		elseif cmd == "START" then
-			log.info("Starting reactor")
-			startup()
-			instance.cmd = "RUN"
-		elseif cmd == "EXIT" then
-			log.info("Manager exiting")
-			if reactorRunning() then
-				log.info("Shutting down reactor")
-				shutdown()
-			end
-
-			for _,v in pairs(instance.tasks) do
-				kernel.tasks.cancel(v)
-			end
-			os.queueEvent("reactor", "manager_exit")
-		elseif cmd == "RESET" then
-			log.info("Resetting...")
-
-			os.reboot()
-		elseif cmd == "RUN" then
-			if lastCmd ~= "RUN" then
-				log.info("Managing reactor")
-
-				-- Initialize expected values
-				eReactor, eTurbine, eFlow = adjust(true)
-			end
-
-			tune()
-			eReactor, eTurbine, eFlow = adjust()
+		if not cmd[2] or cmd[2] == 'all' then
+			return true, status
 		else
-			cmd = lastCmd
+			return true, status[cmd[2]]
 		end
+	end
 
-		instance.status.state = cmd
-		lastCmd = cmd
+	return self.reactor:command(...)
+end
 
-		if cmd == "EXIT" then
-			sendUpdate()
-			return
-		end
-		kernel.sleep(timestep / 20)
+function Controller:run()
+	kernel.start(self.cmd, self)
+
+	self.pid:setTarget(self.buffer:getMax() * 0.5)
+
+	print("Controller running")
+	while true do
+		local powerTarget = self.pid:tick(self.buffer:getLevel())
+		self.turbine:setTarget(powerTarget)
+
+		local steamTarget = self.turbine:getInputTarget()
+		self.reactor:setTarget(steamTarget)
+
+		sleep(5)
 	end
 end
+function Controller:cmd()
+	while true do
+		local event = kernel.wait(nil, "reactor", "command", "controller", self.id)
 
--- Save current model tuning parameters
-local function saveModels()
-	reactorModel:save(files.reactor)
-	turbineModel:save(files.turbine)
-	flowModel:save(files.flow)
-end
-
--- Check reactor conditions and scram if unsafe
-local function failsafe()
-	if reactorUnsafe() then
-		scram()
+		local response = table.pack(self:command(table.unpack(event, 5)))
+		os.queueEvent("reactor", "response", "controller", self.id, table.unpack(response))
 	end
 end
-
--- Update status information
-local function statusUpdate()
-	instance.status.production = getPowerProduction()
-	instance.status.burnRate = getPowerSetting()
-
-	sendUpdate()
-end
-
-instance = {
-	cmd = "NONE",
-	status = {}
-}
-
--- Schedule services and process
-instance.tasks = {
-	failsafe = kernel.tasks.schedule(failsafe, 1, 1),
-	status = kernel.tasks.schedule(statusUpdate, 1, 1),
-	models = kernel.tasks.schedule(saveModels, 30, 30)
-}
-kernel.start(manage)
-
-return instance
