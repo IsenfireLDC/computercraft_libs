@@ -1,7 +1,7 @@
 -- <<<interface:kernel/driver|extension:table>>>
 
 require("apis/table_extensions")
-require("apis/driver")
+require("interfaces/kernel/driver")
 
 
 -- TODO
