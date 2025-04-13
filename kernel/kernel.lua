@@ -653,6 +653,38 @@ local function wait(timeout, ...)
 	end
 end
 
+-- [Helper]
+local function selectEvents(...)
+	local eventList = table.pack(...)
+
+	while true do
+		local event = nextEvent()
+
+		for i=1,eventList.n,1 do
+			if matchEventFilter(eventList[i], event) then
+				return event
+			end
+		end
+	end
+end
+-- Waits for any event in a list with timeout
+-- If timeout is supplied, adds one event to the list and handles it
+-- Probably less efficient then wait for single events
+local function select(timeout, ...)
+	if timeout and timeout >= 0 then
+		local tId = os.startTimer(timeout)
+
+		local event = selectEvents({'timer', tId}, ...)
+		if event[1] == "timer" and event[2] == tId then
+			return nil, "timeout"
+		else
+			return event
+		end
+	else
+		return selectEvents(...)
+	end
+end
+
 -- Run a function to completion without yielding to CC
 -- The function cannot handle events, wait, etc
 local function atomic(func, ...)
@@ -938,6 +970,7 @@ instance = {
 
 	-- Misc utilities
 	wait = wait,
+	select = select,
 	atomic = atomic,
 	task = task,
 
