@@ -1,7 +1,8 @@
--- <<<extensions:device/model,device/limits|api:kernel>>>
+-- <<<interface:device/controller|extensions:device/model,device/limits|api:kernel>>>
 
 local kernel = require("apis/kernel")
 
+require("interfaces/device/controller")
 require("extensions/device/model")
 require("extensions/device/limits")
 
