@@ -5,6 +5,9 @@ if not fs.exists("/init.lua") then
 	return
 end
 
-kernel.exec("/init.lua")
+local pid, msg = kernel.exec("/init.lua")
+if not pid then
+	error("Could not create initialization process: "..msg)
+end
 
 print(kernel.run())

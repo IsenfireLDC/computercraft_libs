@@ -607,6 +607,10 @@ local function exec(path, ...)
 	end
 
 	local func = loadfile(path, nil, _ENV)
+	--local g, func = pcall(loadfile, path, nil, _ENV)
+	--if not g then
+	--	return nil, "Load failed: "..(func and func or '')
+	--end
 
 	return start(func, ...)
 end

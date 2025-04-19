@@ -1,10 +1,10 @@
--- <<<interface:reactor/turbine|api:device>>>
+-- <<<interface:kernel/driver|api:device>>>
 
 local device = require("apis/device")
 
-require("interfaces/reactor/turbine")
+require("interfaces/kernel/driver")
 
-MekTurbineDriver = TurbineDriver:new{}
+MekTurbineDriver = IDriver:new{}
 
 function MekTurbineDriver:ready()
 	return self.device and self.device.isFormed()
@@ -36,8 +36,8 @@ end
 function MekTurbineDriver:getDevices()
 	return {
 		sensors = device.mapDevices('sensor', self, {
-			'turbine:flow' = { self.getInput, self.getInputMax },
-			'turbine:power' = self.getOutput
+			['turbine:flow'] = { self.getInput, self.getInputMax },
+			['turbine:power'] = self.getOutput
 		})
 	}
 end

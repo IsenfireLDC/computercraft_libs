@@ -170,3 +170,28 @@ function table.merge(...)
 
 	return merged
 end
+
+local function fillTable(dest, src)
+	for k,v in pairs(src) do
+		if type(v) == 'table' then
+			if not dest[k] or type(dest[k]) ~= 'table' then
+				dest[k] = {}
+			end
+
+			fillTable(dest[k], v)
+		else
+			dest[k] = v
+		end
+	end
+end
+function table.mergeall(...)
+	local tables = table.pack(...)
+
+	local merged = {}
+
+	for i=1,tables.n,1 do
+		fillTable(merged, tables[i])
+	end
+
+	return merged
+end

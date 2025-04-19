@@ -105,3 +105,6 @@ function TurbineController:run()
 		sleep(1)
 	end
 end
+
+-- Initialize limits
+TurbineController:resetLimits()

@@ -1,6 +1,6 @@
 -- <<<interface:device/device>>>
 
-require("interfaces/device/device.lua")
+require("interfaces/device/device")
 
 Sensor = Device:new{
 	class = 'sensor'

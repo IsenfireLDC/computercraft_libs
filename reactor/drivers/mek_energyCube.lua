@@ -1,8 +1,10 @@
--- <<<interface:reactor/buffer>>>
+-- <<<interface:kernel/driver|api:device>>>
 
-require("interfaces/reactor/buffer")
+local device = require("apis/device")
 
-MekEnergyCubeDriver = BufferDriver:new{}
+require("interfaces/kernel/driver")
+
+MekEnergyCubeDriver = IDriver:new{}
 
 function MekEnergyCubeDriver:ready()
 	return self.device and true or false
@@ -16,4 +18,12 @@ function MekEnergyCubeDriver:getMax()
 end
 function MekEnergyCubeDriver:getFraction()
 	return self.device.getEnergyFilledPercentage()
+end
+
+function MekEnergyCubeDriver:getDevices()
+	return {
+		sensors = device.mapDevices('sensor', self, {
+			['buffer:energy'] = { self.getLevel, self.getMax }
+		})
+	}
 end

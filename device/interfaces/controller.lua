@@ -18,21 +18,27 @@ Controller = Device:new{
 }
 
 function Controller:checkDevices()
-	for _,v in ipairs(self.requiredDevices.sensors) do
-		if not self.sensors[v] then
-			return false, 'sensor', v
+	if self.requiredDevices.sensors then
+		for _,v in ipairs(self.requiredDevices.sensors) do
+			if not self.sensors[v] then
+				return false, 'sensor', v
+			end
 		end
 	end
 
-	for _,v in ipairs(self.requiredDevices.controllers) do
-		if not self.controllers[v] then
-			return false, 'controller', v
+	if self.requiredDevices.controllers then
+		for _,v in ipairs(self.requiredDevices.controllers) do
+			if not self.controllers[v] then
+				return false, 'controller', v
+			end
 		end
 	end
 
-	for _,v in ipairs(self.requiredDevices.actuators) do
-		if not self.actuators[v] then
-			return false, 'actuator', v
+	if self.requiredDevices.actuators then
+		for _,v in ipairs(self.requiredDevices.actuators) do
+			if not self.actuators[v] then
+				return false, 'actuator', v
+			end
 		end
 	end
 

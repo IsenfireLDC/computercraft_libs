@@ -98,7 +98,7 @@ function ReactorController:run()
 		error("Missing required "..dtype.." "..name)
 	end
 
-	self:loadModel()
+	local haveModel = self:loadModel()
 
 	local maxBurn = self.sensors['reactor:burn']:getMax()
 	if not self.limits.burn.max or maxBurn < self.limits.burn.max then
@@ -130,18 +130,24 @@ function ReactorController:run()
 			self.model:tune(input, output)
 
 			local setting = self:limit("burn", self.model:action(self.target))
-			local delta = setting - input
-			-- Limit power increase to 25% per second to allow the model to tune
-			if delta > self.limits.burn.max / 4 then
-				setting = input + (self.limits.burn.max / 4 * (delta > 0 and 1 or -1))
+
+			-- Try to avoid blowing up the reactor because we don't have a good model yet
+			if not haveModel then
+				local delta = setting - input
+
+				-- Limit power increase to 5% per second to allow the model to tune
+				if delta > self.limits.burn.max / 20 then
+					setting = input + (self.limits.burn.max / 20 * (delta > 0 and 1 or -1))
+				end
 			end
 
-			self.actutors['reactor:burn']:setValue(setting)
+			self.actuators['reactor:burn']:setValue(setting)
 		end
 
 		-- Save the model every 30 seconds
 		count = count + 1
 		if count >= 30 then
+			haveModel = true
 			self:saveModel()
 			count = 0
 		end
@@ -179,3 +185,8 @@ function ReactorController:status()
 		sleep(1)
 	end
 end
+
+
+
+-- Initialize limits
+ReactorController:resetLimits()

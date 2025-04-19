@@ -16,7 +16,8 @@ SystemController = Controller:new{
 		}
 	},
 
-	state = 'uninitialized'
+	state = 'uninitialized',
+	target = 0.5
 }
 
 

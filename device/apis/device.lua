@@ -29,7 +29,7 @@ local function mapDevices(deviceClass, driver, map)
 
 			devices[name] = sensor
 		end
-	elseif deviceClass == 'sensor' then
+	elseif deviceClass == 'actuator' then
 		for name,method in pairs(map) do
 			local actuator = Actuator:new{}
 
@@ -45,8 +45,43 @@ local function mapDevices(deviceClass, driver, map)
 end
 
 
+local function mergeTables(...)
+	local devTables = table.pack(...)
+
+	local merged = {
+		sensors = {},
+		controllers = {},
+		actuators = {}
+	}
+	for i=1,devTables.n,1 do
+		local tab = devTables[i]
+
+		for k,v in pairs(tab) do
+			if k == 'sensors' then
+				for k,v in pairs(tab.sensors) do
+					merged.sensors[k] = v
+				end
+			elseif k == 'controllers' then
+				for k,v in pairs(tab.controllers) do
+					merged.controllers[k] = v
+				end
+			elseif k == 'actuators' then
+				for k,v in pairs(tab.actuators) do
+					merged.actuators[k] = v
+				end
+			else
+				merged[k] = v
+			end
+		end
+	end
+
+	return merged
+end
+
+
 instance = {
-	mapDevices = mapDevices
+	mapDevices = mapDevices,
+	mergeTables = mergeTables
 }
 
 return instance

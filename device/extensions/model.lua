@@ -1,6 +1,6 @@
--- <<<interface:device/controller|api:model>>>
+-- <<<interface:device/extension|api:model>>>
 
-require("interfaces/device/controller")
+require("interfaces/device/extension")
 
 require("apis/model")
 
@@ -11,6 +11,17 @@ ModelExtension = DeviceExtension:new{
 	modelFile = nil,
 	model = nil
 }
+
+function ModelExtension:new(obj)
+	obj = obj or {}
+
+	if not obj.model then obj.model = Model:new{} end
+
+	setmetatable(obj, self)
+	self.__index = self
+
+	return obj
+end
 
 
 function ModelExtension:getModelFile()

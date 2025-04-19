@@ -1,24 +1,21 @@
--- <<<interface:reactor/reactor|api:device>>>
+-- <<<interface:kernel/driver|api:device>>>
 
 local device = require("apis/device")
 
-require("interfaces/reactor/reactor")
+require("interfaces/kernel/driver")
 
-MekReactorDriver = ReactorDriver:new{}
+MekReactorDriver = IDriver:new{}
 
 function MekReactorDriver:ready()
 	return self.device and self.device.isFormed()
 end
 
 function MekReactorDriver:start()
-	self.device.setBurnRate(0)
-
 	if not self.device.getStatus() then
 		self.device.activate()
 	end
 end
 function MekReactorDriver:stop()
-	self.device.setBurnRate(0)
 	if self.device.getStatus() then
 		self.device.scram()
 	end
@@ -58,18 +55,18 @@ end
 function MekReactorDriver:getDevices()
 	return {
 		sensors = device.mapDevices('sensor', self, {
-			'reactor:burn' = { self.getBurnRate, self.getMaxBurnRate },
-			'reactor:enable' = self.getStatus,
-			'reactor:temp' = self.getTemperature,
-			'reactor:heating' = self.getOutput
+			['reactor:burn'] = { self.getBurnRate, self.getMaxBurnRate },
+			['reactor:enable'] = function(self) return self.device.getStatus() end,
+			['reactor:temp'] = self.getTemperature,
+			['reactor:heating'] = self.getOutput
 		}),
 		actuators = device.mapDevices('actuator', self, {
-			'reactor:burn' = self.setBurnRate,
-			'reactor:enable' = function(self, enable)
+			['reactor:burn'] = self.setBurnRate,
+			['reactor:enable'] = function(self, enable)
 				if enable then
-					self:activate()
+					self:start()
 				else
-					self:scram()
+					self:stop()
 				end
 			end
 		})

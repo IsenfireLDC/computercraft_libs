@@ -13,8 +13,6 @@
 -- status >    state, faults, etc.
 
 -- TODO: getCommands?
--- TODO: How to link controllers and sensors/actuators/controllers
--- TODO: Required devices lists for controllers
 
 Device = {
 	class = 'generic',
@@ -22,17 +20,42 @@ Device = {
 	type = 'unknown'
 }
 
+-- ext -> ext -> obj -> self
 function Device:new(obj)
 	obj = obj or {}
 
-	-- TODO: Test this
-	local meta = obj
-	for _,ext in ipairs(obj.extensions) do
-		meta = setmetatable(meta, ext:new{})
-	end
+	if obj.extensions then
+		local extensions = {}
+		for _,ext in ipairs(obj.extensions) do
+			table.insert(extensions, ext:new{})
+		end
 
-	setmetatable(meta, self)
-	self.__index = self
+		local mt = {
+			__index = function(t, k)
+				local v
+				for _,ext in ipairs(extensions) do
+					if ext[k] then
+						v = ext[k]
+						break
+					end
+				end
+
+				-- Cache
+				if v then
+					t[k] = v
+					return v
+				end
+
+				return self[k]
+			end
+		}
+
+		setmetatable(obj, mt)
+		obj.__index = obj
+	else
+		setmetatable(obj, self)
+		self.__index = self
+	end
 
 	return obj
 end
