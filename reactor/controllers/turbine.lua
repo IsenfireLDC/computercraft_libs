@@ -1,21 +1,26 @@
--- <<<interface:reactor/controller|api:kernel>>>
+-- <<<extensions:device/model,device/limits|api:kernel>>>
 
 local kernel = require("apis/kernel")
 
-require("interfaces/reactor/controller")
+require("extensions/device/model")
+require("extensions/device/limits")
 
-TurbineController = IController:new{
-	id = "unnamed",
-	driverType = "turbineValve",
-	modelFile = "/data/models/turbine.dat"
+TurbineController = Controller:new{
+	type = 'turbine',
+	extensions = { ModelExtension, LimitsExtension },
+	requiredDevices = {
+		sensors = {
+			'turbine:flow',
+			'turbine:power'
+		},
+		controllers = {
+			'reactor'
+		}
+	},
+
+	state = 'uninitialized'
 }
 
-function TurbineController.init(id)
-	return TurbineController:new{
-		id = id,
-		modelFile = "/data/models/turbine-"..id..".dat"
-	}
-end
 
 function TurbineController:resetLimits()
 	self.limits = {
@@ -23,56 +28,73 @@ function TurbineController:resetLimits()
 	}
 end
 
-function TurbineController:updateTarget()
-	local input = self.driver:getInput()
-	local output = self.driver:getOutput()
-	self.model:tune(input, output)
+function TurbineController:sendCommand(cmd, ...)
+	local args = table.pack(...)
 
-	local setting = self:limit("flow", self.model:action(self.target))
-	self.inputTarget = setting
-end
-function TurbineController:getInputTarget()
-	return self.inputTarget
-end
+	-- Forward command to reactor
+	self.controllers['reactor']:sendCommand(cmd, ...)
 
-function TurbineController:command(...)
-	local cmd = table.pack(...)
+	if cmd == 'init' then
+		-- start handler
+		kernel.start(self.run, self)
 
-	if cmd[1] == "status" then
-		local status = {
-			target = self.target,
-			inputTarget = self.inputTarget,
-			input = self.driver:getInput(),
-			output = self.driver:getOutput()
-		}
+		-- move to ready
+		self.state = 'ready'
+	elseif cmd == 'reset' then
+		-- clear faults
+		self.faults = {}
 
-		if not cmd[2] or cmd[2] == 'all' then
-			return true, status
-		else
-			return true, status[cmd[2]]
-		end
-	elseif cmd[1] == "target" then
-		self:setTarget(cmd[2])
-		self:updateTarget()
-		return true
-	elseif cmd[1] == "in_target" then
-		return true, self.inputTarget
+		-- move to ready
+		self.state = 'ready'
+	elseif cmd == 'start' then
+		-- move to run
+		self.state = 'run'
+	elseif cmd == 'stop' then
+		-- move to ready
+		self.state = 'ready'
+	elseif cmd == 'scram' then
+		-- move to safety
+		self.state = 'safety'
 	end
 end
 
 function TurbineController:run()
-	if not self.driver then
-		error("Controller cannot run without driver")
+	local g, dtype, name = self:checkDevices()
+	if not g then
+		error("Missing required "..dtype.." "..name)
 	end
 
 	self:loadModel()
 
-	kernel.start(self.cmd, self)
+	local maxFlow = self.sensors['turbine:flow']:getMax()
+	if not self.limits.flow.max or maxFlow < self.limits.flow.max then
+		self.limits.flow.max = maxFlow
+	end
+
+	-- Match reactor state
+	self.state = self.controllers['reactor']:getStatus('state')
 
 	local count = 0
 	while true do
-		self:updateTarget()
+		if self.state == 'safety' then
+			self.controllers['reactor']:setTarget(0)
+		elseif self.state == 'ready' then
+			-- nothing to do
+		elseif self.state == 'run' then
+			local input = self.sensors['turbine:flow']:getValue()
+			local output = self.sensors['turbine:power']:getValue()
+			self.model:tune(input, output)
 
+			local setting = self:limit("flow", self.model:action(self.target))
+			self.controllers['reactor']:setTarget(setting)
+		end
+
+		local rState = self.controllers['reactor']:getStatus('state')
+		if rState ~= self.state then
+			self.state = rState
+		end
+
+		-- Save the model every 30 seconds
 		count = count + 1
 		if count >= 30 then
 			self:saveModel()
@@ -80,13 +102,5 @@ function TurbineController:run()
 		end
 
 		sleep(1)
-	end
-end
-function TurbineController:cmd()
-	while true do
-		local event = kernel.wait(nil, "reactor", "command", "turbine", self.id)
-
-		local response = table.pack(self:command(table.unpack(event, 5)))
-		os.queueEvent("reactor", "response", "turbine", self.id, table.unpack(response))
 	end
 end
