@@ -1,4 +1,6 @@
--- <<<interface:reactor/turbine>>>
+-- <<<interface:reactor/turbine|api:device>>>
+
+local device = require("apis/device")
 
 require("interfaces/reactor/turbine")
 
@@ -8,6 +10,9 @@ function MekTurbineDriver:ready()
 	return self.device and self.device.isFormed()
 end
 
+function MekTurbineDriver:getInputMax()
+	return self.device.getMaxFlowRate()
+end
 function MekTurbineDriver:getInput()
 	return self.device.getFlowRate()
 end
@@ -26,4 +31,13 @@ function MekTurbineDriver:getOutputBuffer()
 end
 function MekTurbineDriver:getOutputBufferMax()
 	return self.device.getMaxEnergy()
+end
+
+function MekTurbineDriver:getDevices()
+	return {
+		sensors = device.mapDevices('sensor', self, {
+			'turbine:flow' = { self.getInput, self.getInputMax },
+			'turbine:power' = self.getOutput
+		})
+	}
 end

@@ -1,4 +1,6 @@
--- <<<interface:reactor/reactor>>>
+-- <<<interface:reactor/reactor|api:device>>>
+
+local device = require("apis/device")
 
 require("interfaces/reactor/reactor")
 
@@ -50,4 +52,26 @@ end
 
 function MekReactorDriver:getOutput()
 	return self.device.getHeatingRate()
+end
+
+
+function MekReactorDriver:getDevices()
+	return {
+		sensors = device.mapDevices('sensor', self, {
+			'reactor:burn' = { self.getBurnRate, self.getMaxBurnRate },
+			'reactor:enable' = self.getStatus,
+			'reactor:temp' = self.getTemperature,
+			'reactor:heating' = self.getOutput
+		}),
+		actuators = device.mapDevices('actuator', self, {
+			'reactor:burn' = self.setBurnRate,
+			'reactor:enable' = function(self, enable)
+				if enable then
+					self:activate()
+				else
+					self:scram()
+				end
+			end
+		})
+	}
 end
