@@ -23,8 +23,13 @@ local instance = {}
 
 
 local function matchEventFilter(filter, event)
-	-- Assume empty filter if .n is nil
-	if filter.n == nil then return true end
+	if filter.n == nil then
+		if #filter == 0 then
+			return true
+		else
+			filter.n = #filter
+		end
+	end
 
 	for i=1,filter.n,1 do
 		local p = filter[i]
