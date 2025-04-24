@@ -729,13 +729,32 @@ local function task(func, period)
 	end
 
 	return function(...)
-		local time = os.time() * 50 -- in-game time in seconds
+		local ret = func(...)
 
-		while func(...) do
-			time = time + period
-			local aId = os.setAlarm(time / 50)
+		while ret or ret == nil do
+			sleep(period)
 
-			instance.wait(nil, "alarm", aId)
+			ret = func(...)
+		end
+	end
+end
+
+-- Create an event handler from a function
+-- Return value can be used to create a process
+local function event(func, ...)
+	if not func then
+		return nil, "Need function"
+	end
+
+	return function(...)
+		local run = true
+		while run do
+			local event = instance.wait(nil, table.unpack(args))
+
+			run = func(event)
+			if run == nil then
+				run = true
+			end
 		end
 	end
 end
@@ -982,6 +1001,7 @@ instance = {
 	select = select,
 	atomic = atomic,
 	task = task,
+	event = event,
 
 	-- Peripheral drivers
 	drivers = {},
