@@ -142,14 +142,14 @@ function ReactorController:run()
 			end
 
 			self.actuators['reactor:burn']:setValue(setting)
-		end
 
-		-- Save the model every 30 seconds
-		count = count + 1
-		if count >= 30 then
-			haveModel = true
-			self:saveModel()
-			count = 0
+			-- Save the model every 30 seconds
+			count = count + 1
+			if count >= 30 then
+				haveModel = true
+				self:saveModel()
+				count = 0
+			end
 		end
 
 		sleep(1)

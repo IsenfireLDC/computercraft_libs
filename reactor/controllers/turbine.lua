@@ -88,18 +88,18 @@ function TurbineController:run()
 
 			local setting = self:limit("flow", self.model:action(self.target))
 			self.controllers['reactor']:setTarget(setting)
+
+			-- Save the model every 30 seconds
+			count = count + 1
+			if count >= 30 then
+				self:saveModel()
+				count = 0
+			end
 		end
 
 		local rState = self.controllers['reactor']:getStatus('state')
 		if rState ~= self.state then
 			self.state = rState
-		end
-
-		-- Save the model every 30 seconds
-		count = count + 1
-		if count >= 30 then
-			self:saveModel()
-			count = 0
 		end
 
 		sleep(1)
