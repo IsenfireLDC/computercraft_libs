@@ -1,12 +1,8 @@
--- <<<api:kernel,device>>>
--- <<<driver:reactor/mek_reactor,reactor/mek_turbine,reactor/mek_energyCube>>>
+-- <<<api:kernel,devman>>>
 -- <<<controller:reactor,turbine,system>>>
--- <<<extension:table>>>
 
 local kernel = require("apis/kernel")
-local device = require("apis/device")
-
-require("extensions/table")
+local devman = require("apis/devman")
 
 local monitor = peripheral.find('monitor')
 local oldTerm = term.current()
@@ -24,99 +20,51 @@ kernel.start(function()
 end)
 
 
--- Setup drivers
-print("Setting up drivers")
-require("drivers/reactor/mek_reactor")
-require("drivers/reactor/mek_turbine")
-require("drivers/reactor/mek_energyCube")
-
-print("Adding drivers")
-local types = {
-	reactor = "fissionReactorLogicAdapter",
-	turbine = "turbineValve",
-	buffer = "basicEnergyCube"
+local driverTable = {
+	{ type = 'fissionReactorLogicAdapter', file = '/drivers/reactor/mek_reactor.lua' },
+	{ type = 'turbineValve', file = '/drivers/reactor/mek_turbine.lua' },
+	{ type = 'basicEnergyCube', file = '/drivers/reactor/mek_energyCube.lua' }
 }
-kernel.addDriver(types.reactor, MekReactorDriver)
-kernel.addDriver(types.turbine, MekTurbineDriver)
-kernel.addDriver(types.buffer, MekEnergyCubeDriver)
 
-
--- Setup devices
-print("Setting up devices")
-local devices = {}
-while not devices.reactor or not devices.turbine or not devices.buffer do
-	local event = kernel.select(nil,
-		table.pack('kernel', 'driver', 'attach', nil, types.reactor),
-		table.pack('kernel', 'driver', 'attach', nil, types.turbine),
-		table.pack('kernel', 'driver', 'attach', nil, types.buffer)
-	)
-
-	for k,v in pairs(types) do
-		if event[5] == v then
-			devices[k] = kernel.device(event[4], event[5])
-			break
-		end
-	end
-end
-
-print("Creating device table")
-local deviceTabs = {
-	reactor = devices.reactor:getDevices(),
-	turbine = devices.turbine:getDevices(),
-	buffer = devices.buffer:getDevices()
-}
-local deviceTable = table.mergeall(
-	deviceTabs.reactor,
-	deviceTabs.turbine,
-	deviceTabs.buffer
-)
-
-
--- Setup controllers
 print("Setting up controllers")
 require("controllers/reactor")
 require("controllers/turbine")
 require("controllers/system")
 
+devman.loadTable(driverTable)
 
-local reactor = ReactorController:new(device.mergeTables(
-	devices.reactor:getDevices(),
-	{ modelFile = "/data/model/reactor.dat" }
-))
-local turbine = TurbineController:new(device.mergeTables(
-	devices.turbine:getDevices(),
-	{ controllers = { reactor = reactor }, modelFile = "/data/model/turbine.dat" }
-))
-local system = SystemController:new(device.mergeTables(
-	devices.buffer:getDevices(),
-	{ controllers = { turbine = turbine } }
-))
+devman.init()
 
-local function printDevices(controller)
-	if controller.sensors then
-		print("Sensors")
-		for k,v in pairs(controller.sensors) do
-			print("> "..k)
+local function createController(class, obj)
+	local controller = devman.createController(class, obj)
+
+	while not controller do
+		sleep(1)
+
+		controller, msg, missing = devman.createController(class, obj)
+
+		if not controller then
+			print(msg)
+
+			if missing then
+				for type,devs in pairs(missing) do
+					print("> "..type..":", table.unpack(devs))
+				end
+			end
 		end
 	end
 
-	if controller.controllers then
-		print("Controllers")
-		for k,v in pairs(controller.controllers) do
-			print("> "..k)
-		end
-	end
-
-	if controller.actuators then
-		print("Actuators")
-		for k,v in pairs(controller.actuators) do
-			print("> "..k)
-		end
-	end
+	return controller
 end
 
+print("Creating reactor controller")
+local reactor = createController(ReactorController, { modelFile = "/data/model/reactor.dat" })
+local turbine = createController(TurbineController, { modelFile = "/data/model/turbine.dat" })
+local system = createController(SystemController)
 
 print("Sending initialization commands")
 system:sendCommand('init')
 
 kernel.exec("/bin/reactor_ui.lua", reactor, turbine, system)
+
+return true
