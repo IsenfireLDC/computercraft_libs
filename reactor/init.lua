@@ -4,6 +4,8 @@
 local kernel = require("apis/kernel")
 local devman = require("apis/devman")
 
+kernel.addPlugin("/plugins/kernel/driver.lua")
+
 local monitor = peripheral.find('monitor')
 local oldTerm = term.current()
 if monitor then

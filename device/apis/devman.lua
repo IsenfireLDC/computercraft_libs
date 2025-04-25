@@ -124,7 +124,7 @@ local function loadTable(devtab)
 		if current and current.file == devSpec.file then
 		else
 			if drivers[devSpec.type] then
-				kernel.removeDriver(devSpec.type)
+				kernel.driver.remove(devSpec.type)
 			end
 
 			local driver = loadfile(devSpec.file, nil, _ENV)()
@@ -133,7 +133,7 @@ local function loadTable(devtab)
 				driver = driver
 			}
 
-			kernel.addDriver(devSpec.type, driver)
+			kernel.driver.add(devSpec.type, driver)
 		end
 	end
 end

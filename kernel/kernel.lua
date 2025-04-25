@@ -762,164 +762,63 @@ end
 
 
 
-local peripherals = {
-	connected = {},
-	drivers = {
-		raw = {}
-	}
-}
+local pluginHandlers = {}
 
-local function attachDriver(type, side, device)
-	if instance.drivers[type] ~= nil then
-		peripherals.drivers[type][side] = instance.drivers[type]:new{
-			side = side,
-			type = type,
-			device = device
-		}
-	end
+local function pluginCall(name, fname, ...)
+	local f = handlers[fname]
 
-	os.queueEvent("kernel", "driver", "attach", side, type)
-end
-local function detachDriver(type, side)
-	if instance.drivers[type] ~= nil and peripherals.drivers[type][side] ~= nil then
-		peripherals.drivers[type][side]:cleanup()
-		peripherals.drivers[type][side] = nil
-	end
+	if f then
+		local r = table.pack(pcall(f, ...))
 
-	os.queueEvent("kernel", "driver", "detach", side, type)
-end
-
-local function addDriver(type, driver)
-	if instance.drivers[type] then
-		return false, "Already have a driver for type "..type
-	end
-
-	instance.drivers[type] = driver
-	peripherals.drivers[type] = {}
-
-	-- Attach this driver to any existing peripherals with this type
-	for side,info in pairs(peripherals.connected) do
-		for i=1,info.types.n,1 do
-			local t = info.types[i]
-
-			if t == type then
-				attachDriver(t, side, info.device)
-			end
+		if not r[1] then
+			print("Plugin error:", table.unpack(r, 2))
 		end
 	end
-
-	return true
-end
-local function removeDriver(type)
-	if not instance.drivers[type] then
-		return false, "No driver with type "..type
-	end
-
-	-- Cleanup all driver instances first
-	for side,driver in pairs(peripherals.drivers[type]) do
-		driver:cleanup()
-	end
-
-	peripherals.drivers[type] = nil
-	instance.drivers[type] = nil
-
-	return true
 end
 
-local function attachPeripheral(side)
-	local types = table.pack(peripheral.getType(side))
-	local periph = peripheral.wrap(side)
+local function addPlugin(name, plugin)
+	if not plugin then
+		plugin = loadfile(name, nil, _ENV)()
 
-	peripherals.connected[side] = {
-		types = types,
-		device = periph
-	}
-
-	-- Always provide a 'raw' driver as default
-	peripherals.drivers.raw[side] = RawDriver:new{
-		side = side,
-		type = 'raw',
-		device = periph
-	}
-
-	for i=1,types.n,1 do
-		local type = types[i]
-
-		attachDriver(type, side, periph)
+		name = name:match("/[^/]*.lua$"):sub(2, -5)
 	end
 
-	os.queueEvent("kernel", "device", "attach", side, types)
-end
-local function detachPeripheral(side)
-	local device = peripherals.connected[side]
-	if not device then return end
+	if not plugin.handlers then
+		pluginHandlers[name] = {}
+	else
+		pluginHandlers[name] = plugin.handlers
+	end
+	instance.plugins[name] = plugin.interface
 
-	for i=1,device.types.n,1 do
-		local type = device.types[i]
-
-		detachDriver(type, side)
+	-- Call 'startup' if the kernel is already running
+	if instance.running then
+		pluginCall(name, 'startup')
 	end
 
-	peripherals.drivers.raw[side]:cleanup()
-	peripherals.drivers.raw[side] = nil
-
-	peripherals.connected[side] = nil
-
-	os.queueEvent("kernel", "device", "detach", side, device.types)
+	return name
 end
 
-
-local function findDevices(type)
-	local ofType = peripherals.drivers[type]
-	if not ofType then
-		return nil, "No driver for type "..type
-	end
-
-	local sideList = {}
-	for side, dev in pairs(ofType) do
-		table.insert(sideList, side)
-	end
-
-	return sideList
-end
-local function device(side, type)
-	if not side then
-		return nil, "Invalid side"
-	end
-
-	if not peripherals.connected[side] then
-		return nil, "No device on side "..side
-	end
-
-	local ofType = peripherals.drivers[type]
-	if not ofType then
-		return nil, "No driver for type "..type
-	end
-
-	local dev = ofType[side]
-	if not dev then
-		return nil, "Device is not of type "..type
-	end
-
-	return dev
+local function removePlugin(name)
+	instance.plugins[name] = nil
+	pluginHandlers[name] = nil
 end
 
 
 
+
+local function runPlugins(func, ...)
+	for name,handlers in pairs(pluginHandlers) do
+		pluginCall(name, func, ...)
+	end
+end
 
 local function p_kernel(state, require_stop, norep)
-	for _,name in ipairs(peripheral.getNames()) do
-		attachPeripheral(name)
-	end
+	runPlugins('startup')
 
 	repeat
 		local event = nextEvent()
 
-		if event[1] == 'peripheral' then
-			attachPeripheral(event[2])
-		elseif event[1] == 'peripheral_detach' then
-			detachPeripheral(event[2])
-		end
+		runPlugins('tick', event)
 
 		if event[1] == "stop_kernel" then
 			-- Send a terminate event before exiting
@@ -934,9 +833,7 @@ local function p_kernel(state, require_stop, norep)
 		end
 	until norep or not state.running
 
-	for name,device in pairs(peripherals.connected) do
-		detachPeripheral(name)
-	end
+	runPlugins('shutdown')
 end
 
 local function run(require_stop)
@@ -1003,18 +900,29 @@ instance = {
 	task = task,
 	event = event,
 
-	-- Peripheral drivers
-	drivers = {},
-	addDriver = addDriver,
-	removeDriver = removeDriver,
-
-	findDevices = findDevices,
-	device = device,
+	-- Plugins
+	plugins = {},
+	addPlugin = addPlugin,
+	removePlugin = removePlugin,
 
 	-- Run the kernel
 	run = run,
 	running = running,
 	terminate = terminate
 }
+
+-- Expose plugin functions directly, as well
+local mt = {
+	__index = instance.plugins,
+	--__index = function(t, k)
+	--	for name,plugin in pairs(instance.plugins) do
+	--		local v = plugin.interface[k]
+	--		if v then
+	--			return v
+	--		end
+	--	end
+	--end
+}
+setmetatable(instance, mt)
 
 return instance
