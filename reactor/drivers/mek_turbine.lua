@@ -41,3 +41,6 @@ function MekTurbineDriver:getDevices()
 		})
 	}
 end
+
+
+return MekTurbineDriver

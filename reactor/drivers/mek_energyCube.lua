@@ -27,3 +27,6 @@ function MekEnergyCubeDriver:getDevices()
 		})
 	}
 end
+
+
+return MekEnergyCubeDriver

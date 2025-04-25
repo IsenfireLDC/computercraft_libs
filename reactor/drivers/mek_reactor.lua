@@ -72,3 +72,6 @@ function MekReactorDriver:getDevices()
 		})
 	}
 end
+
+
+return MekReactorDriver
