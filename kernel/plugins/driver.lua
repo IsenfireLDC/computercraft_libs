@@ -1,179 +1,236 @@
-local peripherals = {
-	connected = {},
-	drivers = {
-		raw = {}
-	}
-}
+-- <<<>>>
 
-local drivers = {}
+local instance
 
-local function attachDriver(type, side, device)
-	print("> attach driver for "..type.." to "..side)
-	if drivers[type] ~= nil then
-		peripherals.drivers[type][side] = drivers[type]:new{
+local drivers = {} -- [name] = { types = types, driver = driver }
+local devices = {} -- [side] = { refcount = 0, name = name, driver = driver }
+
+local registered = {} -- { type?, side?, name }
+
+
+local function loadFile(path)
+	local f = loadfile(path, nil, _ENV)
+
+	local res = table.pack(pcall(f))
+	if not res[1] then
+		return nil, table.unpack(res, 2)
+	end
+
+	return res[2]
+end
+
+local function listToSet(list)
+	local set = {}
+	local count = list.n or #list
+
+	for i=1,count,1 do
+		set[list[i]] = true
+	end
+
+	return set
+end
+
+
+local function attachDevice(side, name, device, driver)
+	devices[side] = {
+		refcount = 1,
+		name = name,
+		driver = driver:new{
 			side = side,
-			type = type,
 			device = device
 		}
-	end
+	}
 
-	os.queueEvent("kernel", "driver", "attach", side, type)
+	os.queueEvent('kernel', 'device', 'attach', name, side)
 end
-local function detachDriver(type, side)
-	print("> detach driver for "..type.." from "..side)
-	if drivers[type] ~= nil and peripherals.drivers[type][side] ~= nil then
-		peripherals.drivers[type][side]:cleanup()
-		peripherals.drivers[type][side] = nil
+local function detachDevice(side, force)
+	local device = devices[side]
+	if not device then return end
+	if not force and device.refcount > 1 then
+		device.refcount = device.refcount - 1
+		return
 	end
 
-	os.queueEvent("kernel", "driver", "detach", side, type)
+	local name = devices[side].name
+
+	devices[side].driver:cleanup()
+	devices[side] = nil
+	
+	-- TODO: get name
+	os.queueEvent('kernel', 'device', 'detach', name, side)
 end
 
-local function addDriver(type, driver)
-	print("> add driver for "..type)
-	if drivers[type] then
-		return false, "Already have a driver for type "..type
+
+
+
+-- driver table { { name = 'mekanism/turbine', types = { 'turbineValve' } } }
+-- optional file field
+local function loadTable(driverTable)
+	local count = driverTable.n or #driverTable
+
+	for i=1,count,1 do
+		local entry = driverTable[i]
+
+		instance.add(entry.name, entry.types, entry.file and loadFile(entry.file))
+	end
+end
+
+
+local function add(name, types, driver)
+	if not types then
+		return nil, "Need peripheral types"
+	elseif not name then
+		return nil, "Need driver name"
 	end
 
-	drivers[type] = driver
-	peripherals.drivers[type] = {}
+	if drivers[name] then
+		return nil, "Have driver with name "..name
+	end
 
-	-- Attach this driver to any existing peripherals with this type
-	for side,info in pairs(peripherals.connected) do
-		for i=1,info.types.n,1 do
-			local t = info.types[i]
+	if not driver then
+		driver, msg = loadFile('/drivers/'..name..'.lua')
 
-			if t == type then
-				attachDriver(t, side, info.device)
-			end
+		if not driver then
+			return nil, "Failed to load driver", msg
 		end
 	end
 
-	return true
-end
-local function removeDriver(type)
-	print("> remove driver for "..type)
-	if not drivers[type] then
-		return false, "No driver with type "..type
-	end
-
-	-- Cleanup all driver instances first
-	for side,driver in pairs(peripherals.drivers[type]) do
-		driver:cleanup()
-	end
-
-	peripherals.drivers[type] = nil
-	drivers[type] = nil
-
-	return true
-end
-
-local function attachPeripheral(side)
-	local types = table.pack(peripheral.getType(side))
-	local periph = peripheral.wrap(side)
-
-	peripherals.connected[side] = {
-		types = types,
-		device = periph
+	drivers[name] = {
+		types = listToSet(types),
+		driver = driver
 	}
 
-	-- Always provide a 'raw' driver as default
-	peripherals.drivers.raw[side] = RawDriver:new{
-		side = side,
-		type = 'raw',
-		device = periph
-	}
-
-	for i=1,types.n,1 do
-		local type = types[i]
-
-		attachDriver(type, side, periph)
-	end
-
-	os.queueEvent("kernel", "device", "attach", side, types)
+	return name
 end
-local function detachPeripheral(side)
-	local device = peripherals.connected[side]
-	if not device then return end
 
-	for i=1,device.types.n,1 do
-		local type = device.types[i]
-
-		detachDriver(type, side)
+local function remove(name)
+	if not name then
+		return nil, "Need driver name"
 	end
 
-	peripherals.drivers.raw[side]:cleanup()
-	peripherals.drivers.raw[side] = nil
+	if not drivers[name] then
+		return nil, "No driver "..name
+	end
 
-	peripherals.connected[side] = nil
-
-	os.queueEvent("kernel", "device", "detach", side, device.types)
+	drivers[name] = nil
+	return name
 end
 
 
-local function findDevices(type)
-	local ofType = peripherals.drivers[type]
-	if not ofType then
-		return nil, "No driver for type "..type
+local function attach(side, name)
+	-- Return cached driver instance if it exists
+	if devices[side] then
+		local device = devices[side]
+		if device.name == name then
+			device.refcount = device.refcount + 1
+			return device.driver
+		else
+			return nil, "Driver "..device.name.." already attached to "..side
+		end
 	end
 
-	local sideList = {}
-	for side, dev in pairs(ofType) do
-		table.insert(sideList, side)
+	local device = peripheral.wrap(side)
+	if not device then
+		return nil, "Could not wrap device "..side
 	end
 
-	return sideList
+	local driver = drivers[name]
+	if not driver then
+		return nil, "No driver "..name
+	end
+
+	-- Check driver compatibility
+	local deviceTypes = { peripheral.getType(device) }
+	local found = false
+	for _,v in ipairs(deviceTypes) do
+		if driver.types[v] then
+			found = true
+		end
+	end
+
+	if not found then
+		return nil, "Driver "..name.." does not support device type(s)", deviceTypes
+	end
+
+	attachDevice(side, name, device, driver)
+
+	return devices[side].driver
 end
-local function device(side, type)
-	if not side then
-		return nil, "Invalid side"
-	end
 
-	if not peripherals.connected[side] then
-		return nil, "No device on side "..side
-	end
-
-	local ofType = peripherals.drivers[type]
-	if not ofType then
-		return nil, "No driver for type "..type
-	end
-
-	local dev = ofType[side]
-	if not dev then
-		return nil, "Device is not of type "..type
-	end
-
-	return dev
+local function detach(side)
+	detachDevice(side, false)
 end
 
 
+-- deviceTable { types?, side?, name }
+local function register(deviceTable)
+	local count = deviceTable.n or #deviceTable
+
+	for i=1,count,1 do
+		local entry = deviceTable[i]
+
+		-- Merge into registered
+		if entry.name then
+			table.insert(registered, {
+				types = listToSet(entry.types),
+				side = entry.side,
+				name = entry.name
+			})
+		end
+	end
+end
+
+
+local function checkFilter(filter, side, types)
+	if filter.side and side ~= filter.side then
+		return false
+	end
+
+	if filter.types then
+		for _,v in ipairs(types) do
+			if filter.types[v] then
+				return true
+			end
+		end
+
+		return false
+	end
+
+	return true
+end
+
+
+instance = {
+	loadTable = loadTable,
+	add = add,
+	remove = remove,
+	attach = attach,
+	detach = detach,
+	register = register
+}
 
 return {
 	handlers = {
-		startup = function()
-			print("> startup")
-			for _,name in ipairs(peripheral.getNames()) do
-				attachPeripheral(name)
-			end
-		end,
 		tick = function(event)
 			if event[1] == 'peripheral' then
-				attachPeripheral(event[2])
+				local device = peripheral.wrap(event[2])
+				local types = { peripheral.getType(device) }
+
+				for _,v in ipairs(registered) do
+					if checkFilter(v, side, types) then
+						attachDevice(side, v.name, device, drivers[name])
+						break
+					end
+				end
 			elseif event[1] == 'peripheral_detach' then
-				detachPeripheral(event[2])
+				detachDevice(event[2], true)
 			end
 		end,
 		shutdown = function()
-			print("> shutdown")
-			for name,device in pairs(peripherals.connected) do
-				detachPeripheral(name)
+			for side,device in pairs(devices) do
+				detachDevice(side, true)
 			end
 		end
 	},
-	interface = {
-		add = addDriver,
-		remove = removeDriver,
-		find = findDevices,
-		get = device
-	}
+	interface = instance
 }
