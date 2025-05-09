@@ -162,25 +162,6 @@ local function detach(side)
 end
 
 
--- deviceTable { types?, side?, name }
-local function register(deviceTable)
-	local count = deviceTable.n or #deviceTable
-
-	for i=1,count,1 do
-		local entry = deviceTable[i]
-
-		-- Merge into registered
-		if entry.name then
-			table.insert(registered, {
-				types = listToSet(entry.types),
-				side = entry.side,
-				name = entry.name
-			})
-		end
-	end
-end
-
-
 local function checkFilter(filter, side, types)
 	if filter.side and side ~= filter.side then
 		return false
@@ -199,6 +180,45 @@ local function checkFilter(filter, side, types)
 	return true
 end
 
+local function checkFilters(side)
+	local device = peripheral.wrap(side)
+	local types = { peripheral.getType(device) }
+
+	for _,v in ipairs(registered) do
+		local name = v.name
+		if checkFilter(v, side, types) then
+			attachDevice(side, name, device, drivers[name].driver)
+			break
+		end
+	end
+end
+
+
+-- deviceTable { types?, side?, name }
+local function register(deviceTable)
+	local count = deviceTable.n or #deviceTable
+
+	for i=1,count,1 do
+		local entry = deviceTable[i]
+
+		-- Merge into registered
+		if entry.name then
+			table.insert(registered, {
+				types = listToSet(entry.types),
+				side = entry.side,
+				name = entry.name
+			})
+		end
+	end
+
+	-- Recheck all devices against new filters
+	local devices = peripheral.getNames()
+	for _,dev in ipairs(devices) do
+		checkFilters(dev)
+	end
+end
+
+
 
 instance = {
 	loadTable = loadTable,
@@ -213,15 +233,7 @@ return {
 	handlers = {
 		tick = function(event)
 			if event[1] == 'peripheral' then
-				local device = peripheral.wrap(event[2])
-				local types = { peripheral.getType(device) }
-
-				for _,v in ipairs(registered) do
-					if checkFilter(v, side, types) then
-						attachDevice(side, v.name, device, drivers[name])
-						break
-					end
-				end
+				checkFilters(event[2])
 			elseif event[1] == 'peripheral_detach' then
 				detachDevice(event[2], true)
 			end
