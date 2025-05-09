@@ -99,9 +99,9 @@ local function connectionHandler()
 	while true do
 		local event = kernel.wait(nil, 'kernel', 'driver')
 
-		if drivers[event[5]] then
+		if drivers[event[4]] then
 			if event[3] == 'attach' then
-				local dev = kernel.device(event[4], event[5])
+				local dev = kernel.driver.attach(event[5], event[4])
 
 				kernel.nice(kernel.start(attachHandler, event[4], dev), 1)
 			else
@@ -114,27 +114,14 @@ end
 
 
 
+-- devices table { 'driver name' ... }
 local function loadTable(devtab)
 	local count = devtab.n or #devtab
 
 	for i=1,count,1 do
-		local devSpec = devtab[i]
+		local entry = devtab[i]
 
-		local current = drivers[devSpec.type]
-		if current and current.file == devSpec.file then
-		else
-			if drivers[devSpec.type] then
-				kernel.driver.remove(devSpec.type)
-			end
-
-			local driver = loadfile(devSpec.file, nil, _ENV)()
-			drivers[devSpec.type] = {
-				file = devSpec.file,
-				driver = driver
-			}
-
-			kernel.driver.add(devSpec.type, driver)
-		end
+		drivers[entry] = true
 	end
 end
 
@@ -142,19 +129,43 @@ local function init()
 	kernel.start(connectionHandler)
 end
 
-local function getDevices(required)
+local function getDevice(class, type, source)
+	source = source or '_default'
+
+	if not class then
+		return nil, "Need device class"
+	elseif not type then
+		return nil, "Need device type"
+	end
+
+	local ofType = devices[class][type]
+	if not ofType then
+		return nil, "No "..class.." of type "..type
+	end
+
+	if not ofType[source] then
+		return nil, "No matching device from source "..source
+	end
+
+	return ofType[source]
+end
+
+local function getDevices(required, present)
+	present = present or {}
 	local found = { sensors = {}, controllers = {}, actuators = {} }
 	local missing = { sensors = {}, controllers = {}, actuators = {} }
 	local good = true
 
 	for class,req in pairs(required) do
 		for _,devType in ipairs(req) do
-			local devtab = devices[class][devType]
-			if devtab then
-				found[class][devType] = devtab._default.device
-			else
-				table.insert(missing[class], devType)
-				good = false
+			if not present[class] or not present[class][devType] then
+				local devtab = devices[class][devType]
+				if devtab then
+					found[class][devType] = devtab._default.device
+				else
+					table.insert(missing[class], devType)
+					good = false
+				end
 			end
 		end
 	end
@@ -162,7 +173,7 @@ local function getDevices(required)
 	return found, not good and missing or nil
 end
 
-local function createController(class, obj)
+local function createController(class, name, obj)
 	if not class then
 		return nil, "Need class"
 	end
@@ -178,7 +189,7 @@ local function createController(class, obj)
 	-- Merge devtab with obj and create instance
 	local controller = class:new(device.mergeTables(devtab, obj))
 
-	addDevice('controller', controller.type, controller)
+	addDevice('controller', controller.type, controller, name)
 	return controller
 end
 
@@ -189,6 +200,7 @@ end
 instance = {
 	loadTable = loadTable,
 	init = init,
+	getDevice = getDevice,
 	getDevices = getDevices,
 	createController = createController
 }
