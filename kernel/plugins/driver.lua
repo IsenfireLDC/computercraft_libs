@@ -41,7 +41,7 @@ local function attachDevice(side, name, device, driver)
 		}
 	}
 
-	os.queueEvent('kernel', 'device', 'attach', name, side)
+	os.queueEvent('kernel', 'driver', 'attach', name, side)
 end
 local function detachDevice(side, force)
 	local device = devices[side]
@@ -57,7 +57,7 @@ local function detachDevice(side, force)
 	devices[side] = nil
 	
 	-- TODO: get name
-	os.queueEvent('kernel', 'device', 'detach', name, side)
+	os.queueEvent('kernel', 'driver', 'detach', name, side)
 end
 
 
