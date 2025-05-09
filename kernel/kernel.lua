@@ -765,6 +765,9 @@ end
 local pluginHandlers = {}
 
 local function pluginCall(name, fname, ...)
+	local handlers = pluginHandlers[name]
+	if not handlers then return end
+
 	local f = handlers[fname]
 
 	if f then
