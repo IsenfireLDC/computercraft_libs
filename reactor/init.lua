@@ -13,6 +13,12 @@ if monitor then
 end
 
 kernel.start(function()
+	while true do
+		local event = kernel.wait(nil, "kernel", "driver")
+		print("Driver "..event[4].." "..event[3].."ed on "..event[5])
+	end
+end)
+kernel.start(function()
 	local event = kernel.wait(nil, "kernel", "process_complete", nil, "errored")
 	print("Process "..event[3].." errored"..(event[5] and ' ('..event[5]..')' or '')..", terminating")
 
@@ -22,28 +28,49 @@ kernel.start(function()
 end)
 
 
+-- Table for loading drivers
 local driverTable = {
-	{ type = 'fissionReactorLogicAdapter', file = '/drivers/reactor/mek_reactor.lua' },
-	{ type = 'turbineValve', file = '/drivers/reactor/mek_turbine.lua' },
-	{ type = 'basicEnergyCube', file = '/drivers/reactor/mek_energyCube.lua' }
+	{ name = 'mekanism/reactor', types = { 'fissionReactorLogicAdapter' }, file = '/drivers/reactor/mek_reactor.lua' },
+	{ name = 'mekanism/turbine', types = { 'turbineValve' }, file = '/drivers/reactor/mek_turbine.lua' },
+	{ name = 'mekanism/energyCube', types = {
+		'basicEnergyCube',
+		'advancedEnergyCube',
+		'eliteEnergyCube',
+		'ultimateEnergyCube',
+	}, file = '/drivers/reactor/mek_energyCube.lua' }
 }
+
+-- Table for automatically attaching devices
+local deviceFilters = {}
+for i,v in ipairs(driverTable) do
+	deviceFilters[i] = { name = v.name, types = v.types }
+end
+
+-- Device-supporting driver list
+local deviceDrivers = {}
+for i,v in ipairs(driverTable) do
+	table.insert(deviceDrivers, v.name)
+end
+
+kernel.driver.loadTable(driverTable)
+kernel.driver.register(deviceFilters)
 
 print("Setting up controllers")
 require("controllers/reactor")
 require("controllers/turbine")
 require("controllers/system")
 
-devman.loadTable(driverTable)
+devman.loadTable(deviceDrivers)
 
 devman.init()
 
-local function createController(class, obj)
-	local controller = devman.createController(class, obj)
+local function createController(class, name, obj)
+	local controller = devman.createController(class, name, obj)
 
 	while not controller do
 		sleep(1)
 
-		controller, msg, missing = devman.createController(class, obj)
+		controller, msg, missing = devman.createController(class, name, obj)
 
 		if not controller then
 			print(msg)
@@ -60,9 +87,9 @@ local function createController(class, obj)
 end
 
 print("Creating reactor controller")
-local reactor = createController(ReactorController, { modelFile = "/data/model/reactor.dat" })
-local turbine = createController(TurbineController, { modelFile = "/data/model/turbine.dat" })
-local system = createController(SystemController)
+local reactor = createController(ReactorController, 'reactor', { modelFile = "/data/model/reactor.dat" })
+local turbine = createController(TurbineController, 'turbine', { modelFile = "/data/model/turbine.dat" })
+local system = createController(SystemController, 'system')
 
 print("Sending initialization commands")
 system:sendCommand('init')
