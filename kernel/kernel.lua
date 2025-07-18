@@ -761,6 +761,13 @@ end
 
 
 
+-- Returns the pid of the currently running process
+local function pid()
+	return scheduler.running.pid
+end
+
+
+
 
 local pluginHandlers = {}
 
@@ -902,6 +909,7 @@ instance = {
 	atomic = atomic,
 	task = task,
 	event = event,
+	pid = pid,
 
 	-- Plugins
 	plugins = {},
