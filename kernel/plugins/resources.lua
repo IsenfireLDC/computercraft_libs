@@ -59,7 +59,9 @@ instance = {
 return {
 	handlers = {
 		tick = function(event)
-			if event[1] == 'kernel' and event[2] == 'process_complete' then
+			-- Don't automatically free resources allocated by the init process if it exits
+			-- If the system is quitting, the shutdown handler will deallocate
+			if event[1] == 'kernel' and event[2] == 'process_complete' and event[3] ~= 0 then
 				instance.free(event[3])
 			end
 		end,
