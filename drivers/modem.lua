@@ -1,9 +1,9 @@
--- <<<api:kernel,net/netlink;interface:kernel/driver,kernel/resources>>>
+-- <<<api:kernel,net/interface;interface:kernel/driver,kernel/resources>>>
 -- Driver for modem peripheral
 -- Provides interface for opening connections on channels
 
 local kernel = require("apis/kernel")
-require("apis/net/netlink")
+require("apis/net/interface")
 
 require("interfaces/kernel/driver")
 require("interfaces/kernel/resources")
@@ -14,8 +14,11 @@ ChannelResource = ShareableResource:new{
 	device = nil
 }
 
-function ChannelResource:new(obj)
-	obj = obj or {}
+function ChannelResource:new(device, path)
+	local obj = {
+		device = device,
+		path = path
+	}
 
 	setmetatable(obj, self)
 	self.__index = self
@@ -24,21 +27,27 @@ function ChannelResource:new(obj)
 end
 
 function ChannelResource:_createInstance(channel)
-	return NetLink:new{device = self.device, channel = channel}
+	return NetInterface:new{device = self.device, channel = channel, name = self.path}
 end
 
 function ChannelResource:reserve(pid, channel, shared)
-	local link = ShareableResource.reserve(self, pid, channel, shared, channel)
+	local interface = ShareableResource.reserve(self, pid, channel, shared, channel)
 
-	link:open()
+	interface:open()
 
-	return link
+	return interface
+end
+
+function ChannelResource:check(id)
+	local reserved, details = ShareableResources.check(self, id)
+
+	return reserved, details, self.reservations[id].data
 end
 
 
 
 ModemDriver = IDriver:new{
-	resourcePath = "net/none/channel"
+	resourcePath = "net/none"
 }
 
 -- Manage open channels
@@ -51,8 +60,8 @@ function ModemDriver:new(obj)
 
 	kernel.start(obj.h_message, obj)
 
-	obj.resourcePath = "net/"..obj.side.."/channel"
-	kernel.resources.allocate(obj.resourcePath, ChannelResource, obj.device)
+	obj.resourcePath = "net/"..obj.side
+	kernel.resources.allocate(obj.resourcePath, ChannelResource, obj.device, obj.resourcePath)
 
 	return obj
 end
@@ -64,7 +73,7 @@ end
 
 function ModemDriver:h_message()
 	while true do
-		local event = kernel.select(0,
+		local event, msg = kernel.select(nil,
 			table.pack("kernel", "driver", "detach", "net/modem", self.side),
 			table.pack("modem_message", self.side, nil, nil)
 		)
@@ -72,9 +81,14 @@ function ModemDriver:h_message()
 		if event[1] == 'kernel' then
 			return
 		elseif event[1] == "modem_message" then
-			if kernel.resources.check(self.resourcePath, event[3]) then
-				os.queueEvent("net", "driver", self.device, "message", event[3], event[5])
+			local p, details, interface = kernel.resources.check(self.resourcePath, event[3])
+
+			if p and interface.on_recv then
+				interface:on_recv(event[5])
 			end
+			--if kernel.resources.check(self.resourcePath, event[3]) then
+			--	os.queueEvent("net", "driver", self.device, "message", event[3], event[5])
+			--end
 		end
 	end
 end
@@ -82,9 +96,12 @@ end
 
 
 function ModemDriver:open(channel, shared)
-	return kernel.resources.reserve(self.resourcePath, channel, shared)
+	return kernel.resources.reserve(self.resourcePath, channel, shared, self.resourcePath)
 end
 
 function ModemDriver:close(channel)
 	kernel.resources.release(self.resourcePath, channel)
 end
+
+
+return ModemDriver
