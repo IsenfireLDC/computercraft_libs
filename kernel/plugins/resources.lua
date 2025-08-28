@@ -16,6 +16,8 @@ local function allocate(name, handler, ...)
 end
 
 local function deallocate(name)
+	if not reservations[name] then return end
+
 	reservations[name]:delete()
 	reservations[name] = nil
 end
@@ -60,7 +62,7 @@ return {
 			if event[1] == 'kernel' and event[2] == 'process_complete' then
 				instance.free(event[3])
 			end
-		end
+		end,
 		shutdown = function()
 			for name,handler in pairs(reservations) do
 				deallocate(name)
