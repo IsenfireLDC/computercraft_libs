@@ -79,7 +79,10 @@ function BasicResource:reserve(pid, id, ...)
 end
 
 function BasicResource:release(pid, id)
-	if self.reservations[id] and self.reservations[id].pid == pid then
+	local reservation = self.reservations[id]
+	if reservation and reservation.pid == pid then
+		if reservation.data.delete then reservation.data:delete() end
+
 		self.reservations[id] = nil
 	end
 end
