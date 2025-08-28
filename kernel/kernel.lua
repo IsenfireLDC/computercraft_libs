@@ -746,6 +746,7 @@ local function event(func, ...)
 		return nil, "Need function"
 	end
 
+	local args = table.pack(...)
 	return function(...)
 		local run = true
 		while run do
