@@ -39,7 +39,7 @@ function ChannelResource:reserve(pid, channel, shared)
 end
 
 function ChannelResource:check(id)
-	local reserved, details = ShareableResources.check(self, id)
+	local reserved, details = ShareableResource.check(self, id)
 
 	return reserved, details, self.reservations[id].data
 end

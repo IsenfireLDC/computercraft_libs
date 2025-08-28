@@ -28,7 +28,7 @@ function NetLink:new(obj)
 	if not obj.interface then return nil, "Missing bound interface" end
 
 	obj.interface.on_recv = function(self, message)
-		if not forMe(obj, data) then return end
+		if not forMe(obj, message) then return end
 
 		obj:on_recv(message.proto, message.data, message.from)
 	end
