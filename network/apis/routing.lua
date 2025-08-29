@@ -11,9 +11,10 @@ require("apis/net/routing_table")
 
 -- Enumeration of routing packet types
 local RouteType = {
-    ALL = "all",
-    UPDATE = "update",
-    CLOSE = "close"
+	ALL = "all",
+	UPDATE = "update",
+	CLOSE = "close",
+	REFRESH = "refresh"
 }
 
 -- Settings
@@ -21,6 +22,7 @@ local LOAD_CALC_PERIOD = 1
 local UPDATE_PERIOD = 5
 local LOAD_WEIGHT_PREV = .8
 local UPDATES_PER_REFRESH = 20
+local STARTUP_REFRESH_DELAY = 2
 
 
 
@@ -87,6 +89,8 @@ function NetProtoRouting:new(obj, inet)
 		end
 	end
 
+	obj._startupRefresh = os.clock() + STARTUP_REFRESH_DELAY
+
 	setmetatable(obj, self)
 	self.__index = self
 
@@ -114,6 +118,11 @@ function NetProtoRouting:processPacket(from, data)
 		for _,route in ipairs(data.routes) do
 			helpers.closeRoute(self, route)
 		end
+	elseif data.type == RouteType.REFRESH then
+		if obj._startupRefresh then obj._startupRefresh = nil end
+
+		self.doAll = true
+		helpers.sendUpdate(self)
 	end
 end
 
@@ -150,19 +159,38 @@ function NetProtoRouting:start()
 		end)
 	end
 
+	-- Request a full refresh on startup
+	if not self._taskRefresh and self._startupRefresh then
+		self._taskRefresh = kernel.start(function()
+			sleep(self._startupRefresh - os.clock())
+
+			if self._startupRefresh then
+				self._startupRefresh = nil
+
+				self:send({
+					host = helpers.address(self),
+					type = RouteType.REFRESH
+				})
+			end
+		end)
+	end
+
 	self._updateCount = 0
 end
 
 function NetProtoRouting:stop()
-    -- Closing route to this host closes all routes through this host
-    -- TODO: Check that this works
+	-- Closing route to this host closes all routes through this host
+	-- TODO: Check that this works
 	helpers.closeRoute(self, {to=helpers.address(self)})
 
 	-- Kill regular tasks
 	kernel.stop(self._taskLoad)
 	kernel.stop(self._taskUpdate)
 
-    -- Notify network of this host closing
+	self._startupRefresh = nil
+	kernel.stop(self._taskRefresh)
+
+	-- Notify network of this host closing
 	helpers.sendUpdate(self)
 
 	self._taskLoad = nil
@@ -199,10 +227,10 @@ end
 
 function helpers.calculateLoad(self)
 	self.load =
-        (LOAD_WEIGHT_PREV * self.load) +
-        ((1 - LOAD_WEIGHT_PREV) * self.packets / LOAD_CALC_PERIOD)
+		(LOAD_WEIGHT_PREV * self.load) +
+		((1 - LOAD_WEIGHT_PREV) * self.packets / LOAD_CALC_PERIOD)
 
-    self.packets = 0
+	self.packets = 0
 end
 
 
@@ -237,7 +265,7 @@ function helpers.sendUpdate(self)
 		})
 	end
 
-    -- Always send an update packet so there is a heartbeat
+	-- Always send an update packet so there is a heartbeat
 	self:send({
 		host = address,
 		type = self.doAll and RouteType.ALL or RouteType.UPDATE,
@@ -255,14 +283,14 @@ function helpers.sendUpdate(self)
 			})
 		end
 
-        -- Don't send a closed packet if nothing was closed
-        if #closed > 0 then
-            self:send({
-                host = address,
-                type = RouteType.CLOSE,
-                routes = closed,
-                load = self.load
-            })
+		-- Don't send a closed packet if nothing was closed
+		if #closed > 0 then
+			self:send({
+				host = address,
+				type = RouteType.CLOSE,
+				routes = closed,
+				load = self.load
+			})
 		end
 	end
 
@@ -280,30 +308,30 @@ function helpers.sendSwap(self, routes)
 	local address = helpers.address(self)
 
 	-- Create entries for changed routes
-    local swapped = {}
-    for dest, _ in pairs(routes) do
-        table.insert(swapped, {
-            to = dest,
-            dist = self.routes:dist(dest),
-            next = self.routes:get(dest)
-        })
-    end
+	local swapped = {}
+	for dest, _ in pairs(routes) do
+		table.insert(swapped, {
+			to = dest,
+			dist = self.routes:dist(dest),
+			next = self.routes:get(dest)
+		})
+	end
 
-    if #swapped <= 0 then return end
+	if #swapped <= 0 then return end
 
-    self:send({
-        host = helpers.address(self),
-        type = self.doAll and RouteType.ALL or RouteType.UPDATE,
-        routes = swapped,
-        load = self.load
-    })
+	self:send({
+		host = helpers.address(self),
+		type = self.doAll and RouteType.ALL or RouteType.UPDATE,
+		routes = swapped,
+		load = self.load
+	})
 end
 
 
 -- Update a single route or add to a set to send as a batch later
 function helpers.updateRoute(self, route, router, _hostLoad, _batch)
 	if type(route.to) ~= 'number' then
-        error("BAD TYPE: "..type(route.to))
+		error("BAD TYPE: "..type(route.to))
 	end
 
 	_hostLoad = _hostLoad or 0
@@ -327,20 +355,19 @@ end
 
 -- Update a set of routes from an update packet
 function helpers.updateRoutes(self, packet, hostLoad)
-    local updated = {}
-    for _,route in ipairs(packet.routes) do
-		print("rn> update["..packet.host.."]: to "..route.to.." via "..route.next.." with cost", route.dist)
-        if route.next ~= helpers.address(self) then
-            helpers.updateRoute(self, route, packet.host, hostLoad, true)
+	local updated = {}
+	for _,route in ipairs(packet.routes) do
+		if route.next ~= helpers.address(self) then
+			helpers.updateRoute(self, route, packet.host, hostLoad, true)
 
-            table.insert(updated, route.to)
-        end
-    end
+			table.insert(updated, route.to)
+		end
+	end
 
-    if self._toSwap then
-        helpers.sendSwap(self, self._toSwap)
-        self._toSwap = {}
-    end
+	if self._toSwap then
+		helpers.sendSwap(self, self._toSwap)
+		self._toSwap = {}
+	end
 end
 
 
