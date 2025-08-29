@@ -99,7 +99,7 @@ end
 
 
 function NetProtoInternet:route(to)
-	-- TODO
+	-- Trivial case here; replaced by routing protocol on attachment
 	return to
 end
 
@@ -107,7 +107,7 @@ function NetProtoInternet:forward(data)
 	data.ttl = data.ttl - 1
 	if(data.ttl <= 0) then return end
 
-	self.link:send(self.id, data, self:route(to))
+	self.link:send(self.id, data, self:route(data.to))
 end
 
 
