@@ -55,7 +55,7 @@ function Network:new(obj)
 	if not obj.link then return nil, "Need link" end
 
 	obj.link.on_recv = function(link, proto, data, from)
-		obj:processPacket(proto, from, data)
+		return obj:processPacket(proto, from, data)
 	end
 
 	obj.resourcePath = obj.link.interface.name .. "/" .. obj.link.interface.channel
