@@ -17,6 +17,8 @@ function ProtoResource:new(link)
 		link = link
 	}
 
+	obj = ShareableResource:new(obj)
+
 	setmetatable(obj, self)
 	self.__index = self
 

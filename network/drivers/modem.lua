@@ -20,6 +20,8 @@ function ChannelResource:new(device, path)
 		path = path
 	}
 
+	obj = ShareableResource:new(obj)
+
 	setmetatable(obj, self)
 	self.__index = self
 

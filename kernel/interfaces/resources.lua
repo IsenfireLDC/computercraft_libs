@@ -52,6 +52,8 @@ BasicResource = IResource:new{}
 function BasicResource:new(obj)
 	obj = obj or {}
 
+	obj = IResource:new(obj)
+
 	setmetatable(obj, self)
 	self.__index = self
 
@@ -107,6 +109,8 @@ ShareableResource = IResource:new{}
 
 function ShareableResource:new(obj)
 	obj = obj or {}
+
+	obj = IResource:new(obj)
 
 	setmetatable(obj, self)
 	self.__index = self

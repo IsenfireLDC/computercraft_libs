@@ -16,6 +16,8 @@ function InetProtoResource:new(inet)
 		inet = inet
 	}
 
+	obj = ShareableResource:new(obj)
+
 	setmetatable(obj, self)
 	self.__index = self
 
