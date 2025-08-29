@@ -62,7 +62,7 @@ function RoutingTable:add(host, route, distance)
 
 		if bestRoute == route and distance > bestDist then
 			-- Recalculate the shortest route
-			self:recalculateBest(host, distance)
+			self:recalculateBest(host)
 		elseif distance < bestDist then
 			routes._best = route
 		end
@@ -97,6 +97,11 @@ function RoutingTable:del(host, route)
 			routes._best = nil
 
 			self:recalculateBest(host)
+
+			-- If there was no best route found, assume there are no routes
+			if routes._best == nil then
+				self.routes[host] = nil
+			end
 		end
 	end
 end
@@ -123,7 +128,7 @@ function RoutingTable:recalculateBest(host, minDist)
 	if not routes then return nil, "No routes" end
 
 	for sroute, dist in pairs(routes) do
-		if not minDist or dist < minDist then
+		if sroute ~= "_best" and not minDist or dist < minDist then
 			minDist = dist
 			routes._best = sroute
 		end

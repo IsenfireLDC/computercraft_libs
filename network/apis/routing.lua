@@ -56,6 +56,9 @@ function NetProtoRouting:new(obj, inet)
 		obj.routes = RoutingTable:new{}
 	end
 
+	obj.updated = {}
+	obj.closed = {}
+
 	-- Add self-route to the routing table
 	local address = helpers.address(obj)
 	if not obj.routes:get(address) then
@@ -83,9 +86,6 @@ function NetProtoRouting:new(obj, inet)
 			return route
 		end
 	end
-
-	obj.updated = {}
-	obj.closed = {}
 
 	setmetatable(obj, self)
 	self.__index = self
@@ -150,7 +150,7 @@ function NetProtoRouting:start()
 		end)
 	end
 
-	obj._updateCount = 0
+	self._updateCount = 0
 end
 
 function NetProtoRouting:stop()
@@ -329,6 +329,7 @@ end
 function helpers.updateRoutes(self, packet, hostLoad)
     local updated = {}
     for _,route in ipairs(packet.routes) do
+		print("rn> update["..packet.host.."]: to "..route.to.." via "..route.next.." with cost", route.dist)
         if route.next ~= helpers.address(self) then
             helpers.updateRoute(self, route, packet.host, hostLoad, true)
 
