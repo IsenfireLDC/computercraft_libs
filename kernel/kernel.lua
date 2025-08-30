@@ -1,7 +1,6 @@
 -- <<<interface:kernel/driver|extension:table>>>
 
 require("extensions/table")
-require("interfaces/kernel/driver")
 
 
 -- TODO
@@ -810,6 +809,10 @@ local function addPlugin(name, plugin)
 end
 
 local function removePlugin(name)
+	if instance.running then
+		pluginCall(name, 'shutdown')
+	end
+
 	instance.plugins[name] = nil
 	pluginHandlers[name] = nil
 end
