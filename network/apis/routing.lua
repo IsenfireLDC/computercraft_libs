@@ -89,7 +89,7 @@ function NetProtoRouting:new(obj, inet)
 		end
 	end
 
-	obj._startupRefresh = os.clock() + STARTUP_REFRESH_DELAY
+	obj._startupRefresh = os.clock() + STARTUP_REFRESH_DELAY + math.random(0, STARTUP_REFRESH_DELAY)
 
 	setmetatable(obj, self)
 	self.__index = self
@@ -120,7 +120,7 @@ function NetProtoRouting:processPacket(from, data)
 		end
 	elseif data.type == RouteType.REFRESH then
 		if self._startupRefresh then
-			self._startupRefresh = os.clock() + STARTUP_REFRESH_DELAY
+			self._startupRefresh = os.clock() + STARTUP_REFRESH_DELAY + math.random(0, STARTUP_REFRESH_DELAY)
 		end
 
 		self.doAll = true
