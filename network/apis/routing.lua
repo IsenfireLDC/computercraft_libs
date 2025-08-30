@@ -22,7 +22,7 @@ local LOAD_CALC_PERIOD = 1
 local UPDATE_PERIOD = 5
 local LOAD_WEIGHT_PREV = .8
 local UPDATES_PER_REFRESH = 20
-local STARTUP_REFRESH_DELAY = 2
+local STARTUP_REFRESH_DELAY = 5
 
 
 
@@ -119,7 +119,9 @@ function NetProtoRouting:processPacket(from, data)
 			helpers.closeRoute(self, route)
 		end
 	elseif data.type == RouteType.REFRESH then
-		if obj._startupRefresh then obj._startupRefresh = nil end
+		if self._startupRefresh then
+			self._startupRefresh = os.clock() + STARTUP_REFRESH_DELAY
+		end
 
 		self.doAll = true
 		helpers.sendUpdate(self)
@@ -162,7 +164,9 @@ function NetProtoRouting:start()
 	-- Request a full refresh on startup
 	if not self._taskRefresh and self._startupRefresh then
 		self._taskRefresh = kernel.start(function()
-			sleep(self._startupRefresh - os.clock())
+			repeat
+				sleep(self._startupRefresh - os.clock())
+			until not self._startupRefresh or self._startupRefresh < os.clock()
 
 			if self._startupRefresh then
 				self._startupRefresh = nil
@@ -240,9 +244,14 @@ function helpers.sendUpdate(self)
 
 	-- Send a full refresh after a fixed number of updates
 	if self._updateCount >= UPDATES_PER_REFRESH then
+		-- Don't bother with a special request if it's been this long
+		self._startupRefresh = nil
+
 		self._updateCount = 0
 		self.doAll = true
+	end
 
+	if self.doAll then
 		-- Fill self.updated with all routes
 		local fauxRoutingTable = {
 			add = function(_, host)
@@ -357,6 +366,7 @@ end
 function helpers.updateRoutes(self, packet, hostLoad)
 	local updated = {}
 	for _,route in ipairs(packet.routes) do
+		--print("rn> update["..packet.host.."]: to "..route.to.." via "..route.next.." with cost", route.dist)
 		if route.next ~= helpers.address(self) then
 			helpers.updateRoute(self, route, packet.host, hostLoad, true)
 
