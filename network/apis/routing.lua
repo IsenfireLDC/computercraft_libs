@@ -18,8 +18,8 @@ local RouteType = {
 }
 
 -- Settings
-local LOAD_CALC_PERIOD = 1
-local UPDATE_PERIOD = 5
+local LOAD_CALC_PERIOD = 5
+local UPDATE_PERIOD = 15
 local LOAD_WEIGHT_PREV = .8
 local UPDATES_PER_REFRESH = 20
 local STARTUP_REFRESH_DELAY = 5
